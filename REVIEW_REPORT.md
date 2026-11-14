@@ -28,3 +28,12 @@ These three passes were performed by the same assistant in separate functional, 
 ## Not tested
 - Frontend package install/build (dependency installation timed out in this environment). JSX syntax was separately transpiled with the locally installed TypeScript compiler and passed.
 - Real Upstox market feed, OAuth, sandbox, broker fills, partial fills, order reconciliation, real-time exits, production latency, restart recovery, Windows installation, and funded/live trading.
+
+## Follow-up repository review — multi-asset research scope
+
+- The current order-validation path requires a daily strategy approval, but no API route writes `state.approval`; as checked, paper and sandbox order submissions therefore fail validation.
+- No background scanner or strategy scheduler generates candidates. Candidate creation is an API input, and a dashboard approval does not create an order.
+- The market-data adapter subscribes to Upstox instrument keys; there is no global equity or commodity feed, market-hours/calendar layer, or cross-venue contract metadata.
+- There is no backtest/forward-test dataset or calibrated performance record. A 90–100% win-rate target cannot be supported or verified from this repository.
+- The research enhancement adds scope controls and source provenance, but does not change order execution or turn research output into a signal.
+- This follow-up is a code inspection only; no automated tests or build were run for these changes.
