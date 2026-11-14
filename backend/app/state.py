@@ -19,6 +19,7 @@ class RuntimeState:
         self.daily_loss_lock = False
         self.daily_loss_baseline = 0.0
         self.intelligence = None
+        self.intelligence_sources = []
         self.intelligence_updated_at = None
         self.intelligence_status = "NOT_REFRESHED"
         self.last_error = None
