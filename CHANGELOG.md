@@ -9,3 +9,9 @@
 - Added one-click daily lock reset without erasing cumulative P&L or re-enabling autonomy.
 - Added dashboard light/dark theme and candidate/audit panels.
 - Live order route remains deliberately disabled.
+
+## Unreleased — Multi-asset research and source provenance
+- Added research scope inputs for equities, commodities, regions/venues, instruments and time horizons.
+- Added structured web-search source links, generation timestamps and audit metadata to research responses.
+- Global intelligence readiness now requires at least one structured source reference.
+- Research outputs remain advisory; this change does not add global market data feeds or live broker execution.
