@@ -10,6 +10,13 @@ export default function App(){
   const [ticks,setTicks]=useState({});
   const [context,setContext]=useState('');
   const [research,setResearch]=useState('');
+  const [intelSources,setIntelSources]=useState([]);
+  const [analysis,setAnalysis]=useState(null);
+  const [analysisClass,setAnalysisClass]=useState('both');
+  const [analysisRegion,setAnalysisRegion]=useState('global');
+  const [analysisInstruments,setAnalysisInstruments]=useState('');
+  const [analysisHorizon,setAnalysisHorizon]=useState('swing');
+  const [analysisQuestion,setAnalysisQuestion]=useState('Assess current market evidence, regime, risks and conditional scenarios.');
   const [lossLimit,setLossLimit]=useState('');
   const [auto,setAuto]=useState(false);
   const [busy,setBusy]=useState(false);
@@ -26,7 +33,7 @@ export default function App(){
       const [s,a,o,m,i,ev,cs]=await Promise.all([
         call('/api/status'),call('/api/account'),call('/api/orders'),call('/api/market/latest'),call('/api/intelligence/latest'),call('/api/audit/events?limit=30'),call('/api/candidates')
       ]);
-      setStatus(s);setAccount(a);setOrders(o);setTicks(m.ticks||{});setResearch(i.brief||'');setAudit(ev||[]);setCandidates(cs||[]);
+      setStatus(s);setAccount(a);setOrders(o);setTicks(m.ticks||{});setResearch(i.brief||'');setIntelSources(i.sources||[]);setAudit(ev||[]);setCandidates(cs||[]);
       setAuto(!!s.autonomous_mode);
     }catch(e){setError('Backend not reachable. Start FastAPI on port 8000.')}
   }
@@ -46,11 +53,27 @@ export default function App(){
   async function kill(){
     try{await call('/api/kill-switch','POST',{});setAuto(false);setNotice('Kill switch engaged. New orders blocked immediately.');await refresh()}catch(e){setError(e.message)}
   }
+  async function runResearch(){
+    setBusy(true);setError('');setNotice('Running multi-asset research with source checks…');
+    try{
+      const instruments=analysisInstruments.split(',').map(x=>x.trim()).filter(Boolean);
+      const r=await call('/api/research','POST',{
+        market_context:context,
+        question:analysisQuestion,
+        asset_class:analysisClass,
+        region:analysisRegion,
+        instruments,
+        horizon:analysisHorizon
+      });
+      setAnalysis(r);
+      setNotice(r.sources?.length?'Research complete with '+r.sources.length+' source references.':'Research complete, but the response returned no structured source references.');
+    }catch(e){setError(e.message)}finally{setBusy(false)}
+  }
   async function refreshIntelligence(){
     setBusy(true);setError('');setNotice('Refreshing global geopolitical and market intelligence…');
     try{
       const r=await call('/api/intelligence/refresh','POST',{extra_context:context});
-      setResearch(r.brief);setNotice('Global intelligence updated. Check market-feed status before expecting READY.');await refresh();
+      setResearch(r.brief);setIntelSources(r.sources||[]);setNotice(r.sources?.length?'Global intelligence updated with '+r.sources.length+' source references.':'Global intelligence updated without structured source references; readiness remains blocked.');await refresh();
     }catch(e){setError(e.message)}finally{setBusy(false)}
   }
   async function connectFeed(){
@@ -121,7 +144,23 @@ export default function App(){
       <p className="muted">Coverage includes all material geopolitical flashpoints, wars, sanctions, shipping routes, oil, gas, metals, commodities, global macro, central banks and direct/indirect sector transmission to Indian markets. Refresh before the session and whenever a major event breaks.</p>
       <textarea value={context} onChange={e=>setContext(e.target.value)} placeholder="Optional: add context, watchlist, or specific concerns…" rows="3"/>
       {research?<pre className="research-output">{research}</pre>:<p className="muted">No global intelligence brief yet. Refresh to establish the news-readiness check.</p>}
+      {intelSources.length>0&&<ul className="source-list">{intelSources.map((s,i)=><li key={s.url}><a href={s.url} target="_blank" rel="noreferrer">{s.title}</a> <span className="muted small">({s.kind})</span></li>)}</ul>}
       <div className="muted small">Last refresh: {status.readiness?.intelligence_last_update||'Never'} · Freshness window: 60 minutes</div>
+    </section>
+    <section className="panel analysis-panel">
+      <div className="panel-title"><BrainCircuit/> Multi-asset research</div>
+      <p className="muted">Research global equities, commodities, or both. Reports include source references, data-quality caveats and bull/base/bear scenarios. Research does not place orders.</p>
+      <div className="analysis-form">
+        <label>Asset class<select value={analysisClass} onChange={e=>setAnalysisClass(e.target.value)}><option value="both">Equities & commodities</option><option value="equities">Equities</option><option value="commodities">Commodities</option></select></label>
+        <label>Region or venues<input value={analysisRegion} onChange={e=>setAnalysisRegion(e.target.value)} placeholder="Global, US, India, LME…"/></label>
+        <label>Instruments<input value={analysisInstruments} onChange={e=>setAnalysisInstruments(e.target.value)} placeholder="Optional, comma-separated symbols or contracts"/></label>
+        <label>Horizon<select value={analysisHorizon} onChange={e=>setAnalysisHorizon(e.target.value)}><option value="intraday">Intraday</option><option value="swing">Swing</option><option value="position">Position</option></select></label>
+      </div>
+      <textarea value={analysisQuestion} onChange={e=>setAnalysisQuestion(e.target.value)} rows="2" placeholder="Research question…"/>
+      <div className="control-row"><span className="muted small">Optional market context above is treated as unverified unless independently sourced.</span><button onClick={runResearch} disabled={busy||analysisQuestion.trim().length<5}>Run research</button></div>
+      {analysis&&<><pre className="research-output">{analysis.research}</pre><div className="muted small">Generated {analysis.generated_at} · {analysis.model} · Web search {analysis.web_search_enabled?'enabled':'disabled'} · {analysis.scope?.asset_class} / {analysis.scope?.region} / {analysis.scope?.horizon}</div>
+        {analysis.sources?.length>0&&<ul className="source-list">{analysis.sources.map((s,i)=><li key={s.url}><a href={s.url} target="_blank" rel="noreferrer">{s.title}</a> <span className="muted small">({s.kind})</span></li>)}</ul>}
+      </>}
     </section>
     <section className="panel"><div className="panel-title"><Activity/> Order book <button onClick={refresh}><RefreshCw size={14}/> Refresh</button></div><table><thead><tr><th>Signal</th><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>Target</th><th>Qty</th><th>Status</th></tr></thead><tbody>{orders.length?orders.map((o,i)=><tr key={o.signal_id||i}><td>{o.signal_id}</td><td>{o.symbol}</td><td>{o.side}</td><td>{o.entry}</td><td>{o.stop_loss}</td><td>{o.target}</td><td>{o.quantity}</td><td>{o.status}</td></tr>):<tr><td colSpan="8">No orders yet</td></tr>}</tbody></table></section>
     <section className="panel"><div className="panel-title"><BrainCircuit/> Trade candidates & confidence</div><p className="muted small">Every candidate is retained in the audit ledger with its suggested entry, stop-loss, target, confidence, rationale and review evidence. Dashboard decisions do not place orders.</p><table><thead><tr><th>Candidate</th><th>Side</th><th>Entry</th><th>Stop-loss</th><th>Target</th><th>Confidence</th><th>Status</th><th>Decision</th></tr></thead><tbody>{candidates.length?candidates.map(c=><tr key={c.candidate_id}><td>{c.symbol}<div className="muted small">{c.candidate_id}</div></td><td>{c.side}</td><td>{c.entry}</td><td>{c.stop_loss}</td><td>{c.target}</td><td>{c.confidence}/100</td><td>{c.status}</td><td>{c.status==='PENDING'?<div className="actions"><button onClick={()=>decideCandidate(c.candidate_id,'APPROVED')}>Approve</button><button className="secondary" onClick={()=>decideCandidate(c.candidate_id,'REJECTED')}>Reject</button></div>:'—'}</td></tr>):<tr><td colSpan="8">No candidates received. Candidate generation is not yet automated in this release.</td></tr>}</tbody></table></section>
