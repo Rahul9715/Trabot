@@ -16,6 +16,10 @@
 - Do not connect a funded account or enable live trading with this release.
 - Never put credentials, OAuth tokens, passwords or client secrets in source control, screenshots or chat.
 
+## Multi-asset research
+
+The research endpoint supports equities and commodities across a user-selected region/venue, watchlist and time horizon. When web search is enabled, responses include structured source links and generation timestamps, and the source references are recorded in the audit ledger. Research is advisory only: it does not generate verified trading signals or place orders. Market data and broker execution remain limited to the prototype integrations described below; global live trading is not implemented.
+
 ## Source baseline
 
 The v2.0 development baseline includes a FastAPI backend, React/Vite frontend, SQLite append-only audit ledger with SHA-256 hash chain, candidate review fields, paper-trade suggested-versus-actual values, daily-loss reset controls, and light/dark dashboard theme.
