@@ -26,8 +26,16 @@ class Signal(BaseModel):
     evidence: dict = Field(default_factory=dict)
 
 class ResearchRequest(BaseModel):
-    market_context: str = Field(min_length=20, max_length=15000)
-    question: str = "Identify market regime, risks, sectors to watch and conditional trade setups. Do not invent prices or claim certainty."
+    market_context: str = Field(default="", max_length=15000)
+    question: str = Field(
+        default="Assess the current evidence, market regime, key risks and conditional scenarios.",
+        min_length=5,
+        max_length=2000,
+    )
+    asset_class: Literal["equities", "commodities", "both"] = "both"
+    region: str = Field(default="global", min_length=2, max_length=80)
+    instruments: list[str] = Field(default_factory=list, max_length=100)
+    horizon: Literal["intraday", "swing", "position"] = "swing"
 
 
 class CandidateDecision(BaseModel):
