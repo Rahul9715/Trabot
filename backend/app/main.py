@@ -177,6 +177,7 @@ Extra user context: {req.extra_context}
         response = client.responses.create(
             model=OPENAI_MODEL,
             tools=tools,
+            include=["web_search_call.action.sources"] if AI_WEB_SEARCH_ENABLED else [],
             input=[
                 {"role":"system","content":"You are a rigorous global macro, geopolitics and Indian equities research analyst. Cite source names and timestamps in prose. Distinguish facts from analysis. Never claim certainty or invent market data."},
                 {"role":"user","content":prompt}
@@ -232,7 +233,6 @@ async def market_ws(ws: WebSocket):
 def research(req: ResearchRequest):
     if not OPENAI_API_KEY:
         raise HTTPException(503, "AI research not configured. Set OPENAI_API_KEY locally.")
-    requested_at = datetime.now(timezone.utc).isoformat()
     instruments = [item.strip() for item in req.instruments if item.strip()]
     context = req.market_context.strip() or "No user-supplied market data."
     prompt = f"""
