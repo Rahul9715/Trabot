@@ -50,11 +50,18 @@ if UPSTOX_MODE not in {"sandbox", "live"}:
     raise RuntimeError("UPSTOX_MODE must be sandbox or live.")
 
 AI_WEB_SEARCH_ENABLED = os.getenv("AI_WEB_SEARCH_ENABLED", "true").lower() == "true"
+RESEARCH_SEARCH_PROVIDER = os.getenv("RESEARCH_SEARCH_PROVIDER", "native").strip().lower()
+SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://127.0.0.1:8888").strip().rstrip("/")
+SEARXNG_TIMEOUT_SECONDS = max(3, min(int(os.getenv("SEARXNG_TIMEOUT_SECONDS", "15")), 60))
 
 if AI_PROVIDER not in {"openai", "anthropic", "gemini", "nvidia", "openai_compatible"}:
     raise RuntimeError("AI_PROVIDER must be openai, anthropic, gemini, nvidia, or openai_compatible.")
 if AI_PROVIDER == "openai_compatible" and not AI_BASE_URL:
     raise RuntimeError("AI_BASE_URL is required when AI_PROVIDER=openai_compatible.")
+if RESEARCH_SEARCH_PROVIDER not in {"native", "searxng", "none"}:
+    raise RuntimeError("RESEARCH_SEARCH_PROVIDER must be native, searxng, or none.")
+if RESEARCH_SEARCH_PROVIDER == "searxng" and not SEARXNG_BASE_URL:
+    raise RuntimeError("SEARXNG_BASE_URL is required when RESEARCH_SEARCH_PROVIDER=searxng.")
 
 KILL_SWITCH_RESET_ALLOWED = os.getenv("KILL_SWITCH_RESET_ALLOWED", "true").lower() == "true"
 CANDIDATE_PENDING_TTL_MINUTES = max(1, min(int(os.getenv("CANDIDATE_PENDING_TTL_MINUTES", "30")), 1440))

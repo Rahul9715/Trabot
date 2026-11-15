@@ -11,6 +11,7 @@ AI:
 - Provider adapter layer for OpenAI Responses, Anthropic Messages, Google GenAI, NVIDIA NIM, and OpenAI-compatible Chat Completions.
 - Optional user-supplied context is treated as unverified; provider-grounded sources are surfaced when supported.
 - Explicit instruction to separate facts, assumptions, uncertainty and missing data.
+- Research search can be selected independently from the model provider: native provider search, local SearXNG JSON search, or disabled. SearXNG titles, snippets, URLs, publication dates and engine names are passed to the selected model and retained in the returned source list and audit event.
 
 Live execution is intentionally gated. Prior to enabling it, broker-specific compliance onboarding and a production-grade order state machine are required.
 
@@ -32,6 +33,12 @@ Live execution is intentionally gated. Prior to enabling it, broker-specific com
 - Optional user context can be attached to research and is treated as unverified input.
 
 See `SETUP_GUIDE.md` for Upstox and provider setup.
+
+## v2.3.0 independent web research search
+
+- Added a bounded SearXNG JSON search adapter configurable independently of the AI model provider. This enables source collection when using NVIDIA NIM or another model without native web search.
+- Research prompts receive numbered, explicitly untrusted search snippets; responses include source URLs, publication dates when available, and search-engine metadata.
+- Search is a research-evidence service. It is not a market quote, order-book, broker, or execution feed. SearXNG must be reachable from the backend and have JSON enabled.
 
 ## v2.2.0 market views and execution mode
 

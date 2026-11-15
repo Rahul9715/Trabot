@@ -11,10 +11,10 @@ There is no universal API that works with every model. Providers differ in reque
 | `openai` | OpenAI Responses API | OpenAI web search; source references are collected |
 | `anthropic` | Anthropic Messages API | Anthropic web search tool; citations are collected |
 | `gemini` | Google GenAI `generate_content` | Google Search grounding; grounding sources are collected |
-| `nvidia` | NVIDIA NIM OpenAI-compatible Chat Completions | Text generation; this adapter does not provide web search |
-| `openai_compatible` | Configurable OpenAI-compatible Chat Completions endpoint | Text generation; retrieval/search depends on the selected endpoint and is not assumed |
+| `nvidia` | NVIDIA NIM OpenAI-compatible Chat Completions | Text generation; use independent SearXNG search for external web evidence |
+| `openai_compatible` | Configurable OpenAI-compatible Chat Completions endpoint | Text generation; use independent SearXNG search unless the endpoint's own search is configured |
 
-NVIDIA and custom compatible APIs can run analyses, but this adapter does not fetch outside evidence. Global-intelligence readiness requires source references, so it remains blocked if the selected provider returns none. Do not treat model confidence language as a calibrated win probability.
+Search is selected independently from the model in `RESEARCH_SEARCH_PROVIDER`: `native` uses provider-supported web search, `searxng` queries your local SearXNG JSON endpoint and passes numbered snippets and URLs to any configured model, and `none` disables web search. Do not treat a source snippet as a verified price or a model confidence score as a calibrated win probability.
 
 The provider adapter normalizes text, model/provider IDs, and source records. It does not make proprietary APIs interchangeable, make every model support every tool, or certify model output. Provider model IDs and tool availability can change; use the current model ID shown by the provider and keep this file updated when switching models.
 
@@ -60,6 +60,9 @@ AI_MODEL=
 AI_BASE_URL=
 AI_TIMEOUT_SECONDS=60
 AI_WEB_SEARCH_ENABLED=true
+RESEARCH_SEARCH_PROVIDER=native
+SEARXNG_BASE_URL=http://127.0.0.1:8888
+SEARXNG_TIMEOUT_SECONDS=15
 ```
 
 For OpenAI, keep `AI_PROVIDER=openai`; set `AI_API_KEY` or the legacy `OPENAI_API_KEY`. Set `AI_MODEL` or the legacy `OPENAI_MODEL` to a model enabled for your API project.
@@ -97,6 +100,22 @@ Use only one provider block at a time. `AI_API_KEY` and `AI_MODEL`, when set, ta
 For a copy-ready NVIDIA NIM profile, use `backend/nvidia.env.example` as a reference and copy its entries into your existing `backend/.env`. Fill `NVIDIA_API_KEY` and `NVIDIA_MODEL` with values from your NVIDIA account. Do not replace your whole `.env` if it already contains Upstox settings; preserve those entries and keep the file out of Git.
 
 Create keys from the provider's official API console. API access and billing are separate from consumer chat subscriptions. Check model access, API limits, and search/tool billing with the provider before use. Search grounding is used for the global intelligence brief when the selected provider supports it.
+
+### Use local SearXNG with NVIDIA, Claude, Gemini, or another model
+
+Keep the SearXNG container running at `http://127.0.0.1:8888` and make sure its `settings.yml` enables JSON under `search.formats`. You already verified the endpoint by requesting `/search?q=...&format=json` and receiving result JSON. In `backend/.env`, add or change:
+
+```dotenv
+RESEARCH_SEARCH_PROVIDER=searxng
+SEARXNG_BASE_URL=http://127.0.0.1:8888
+SEARXNG_TIMEOUT_SECONDS=15
+```
+
+Leave `AI_PROVIDER=nvidia` (or select another supported model provider) and retain that provider's API key/model settings. Restart FastAPI after editing `.env`; configuration is loaded at process start. The backend will query SearXNG for a small bounded set of searches, pass result snippets to the model as untrusted evidence, and return source URLs, dates when present, and search-engine names. `AI_WEB_SEARCH_ENABLED` applies to provider-native search; it does not disable the separate SearXNG path.
+
+If FastAPI itself runs inside a Docker container, `127.0.0.1` points to that backend container. On Docker Desktop for Windows, set `SEARXNG_BASE_URL=http://host.docker.internal:8888` so the backend container can reach the SearXNG port published on Windows. If FastAPI runs directly in PowerShell/VS Code, use `127.0.0.1` as shown above.
+
+SearXNG supplies search result metadata/snippets, not complete page verification, licensed market quotes, broker data, or order-book data. Search failure returns an error instead of silently claiming source-backed research. This integration does not create trades or enable live execution.
 
 ## 4. Configure Upstox
 

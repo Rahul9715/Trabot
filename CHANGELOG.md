@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.0 — Independent SearXNG research search
+- Added SearXNG as an optional search provider independent from AI_PROVIDER, including bounded queries, timeouts, JSON/error handling, result deduplication, source snippets and publication metadata.
+- NVIDIA and OpenAI-compatible model research can now receive externally retrieved source evidence without claiming provider-native search support.
+- Added SearXNG provenance to research responses and audit events, plus setup instructions and coverage for success, 403 configuration errors and NVIDIA-backed research.
+- Research/search remains advisory and does not supply market quotes or execute trades.
+
 ## 2.2.1 — NVIDIA NIM environment profile
 - Added a ready-to-copy NVIDIA NIM environment profile and setup instructions.
 - The profile uses NVIDIA's OpenAI-compatible endpoint, leaves the API key/model blank for local configuration, and keeps live trading disabled.
