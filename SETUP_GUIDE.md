@@ -94,6 +94,8 @@ AI_WEB_SEARCH_ENABLED=false
 
 Use only one provider block at a time. `AI_API_KEY` and `AI_MODEL`, when set, take precedence over provider-specific aliases. For `openai_compatible`, `AI_BASE_URL` is required. OpenAI-compatible means the Chat Completions request schema; an endpoint that only implements another API shape will not work through this adapter.
 
+For a copy-ready NVIDIA NIM profile, use `backend/nvidia.env.example` as a reference and copy its entries into your existing `backend/.env`. Fill `NVIDIA_API_KEY` and `NVIDIA_MODEL` with values from your NVIDIA account. Do not replace your whole `.env` if it already contains Upstox settings; preserve those entries and keep the file out of Git.
+
 Create keys from the provider's official API console. API access and billing are separate from consumer chat subscriptions. Check model access, API limits, and search/tool billing with the provider before use. Search grounding is used for the global intelligence brief when the selected provider supports it.
 
 ## 4. Configure Upstox

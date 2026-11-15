@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.1 — NVIDIA NIM environment profile
+- Added a ready-to-copy NVIDIA NIM environment profile and setup instructions.
+- The profile uses NVIDIA's OpenAI-compatible endpoint, leaves the API key/model blank for local configuration, and keeps live trading disabled.
+
 ## 2.2.0 — Market classification and execution mode clarity
 - Added market region, asset class (equity/commodity/currency), and exchange fields to new signals and trade candidates, with API filters for trades, suggestions, and audit events.
 - Added India/US/Global, category, exchange, status, side, symbol, and date filters to trade and suggestion views; added market/category filters to the audit view.
