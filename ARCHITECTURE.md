@@ -2,6 +2,8 @@
 
 React dashboard -> FastAPI -> market data / AI research / strategy approval / deterministic risk engine -> paper order state.
 
+FastAPI lifespan starts the asynchronous periodic intelligence worker and conditionally connects the configured Upstox V3 feed. The worker offloads provider/search I/O from the event loop; request handlers remain available during refresh. Browser buttons use per-action pending state so kill-switch requests remain independent. The SearXNG container and Vite frontend are separate services and must be running separately.
+
 Upstox integration:
 - OAuth 2.0 login URL and callback exchange
 - Upstox Python SDK MarketDataStreamerV3 for V3 protobuf WebSocket stream
@@ -46,3 +48,11 @@ See `SETUP_GUIDE.md` for Upstox and provider setup.
 - Trade, candidate, and audit APIs accept region and asset-class filters. Dashboard views also filter by exchange, symbol, status, side, confidence (suggestions), and date range.
 - The execution mode endpoint permits PAPER only. LIVE selection returns HTTP 501 and leaves state in PAPER because the live order lifecycle is not implemented.
 - Classification makes records filterable; it does not provide US, commodity, FX or global market data feeds. Upstox market feed remains an NSE-focused scaffold.
+
+
+## v2.4.0 service startup and responsiveness
+
+- Global intelligence refresh starts once on FastAPI startup, then repeats every `INTELLIGENCE_REFRESH_INTERVAL_MINUTES` (default 30) when `INTELLIGENCE_AUTO_REFRESH=true`. It waits for provider configuration rather than preventing the API from starting.
+- Upstox feed auto-connects at startup when `UPSTOX_ACCESS_TOKEN` and `UPSTOX_INSTRUMENT_KEYS` are set. Without them, FastAPI stays available and status reports configuration required. The token must be renewed according to Upstox expiry.
+- The browser keeps research, intelligence, feed, bot, and kill-switch actions independent. The API handles synchronous research in FastAPI worker threads and the periodic worker uses a background thread for provider I/O.
+- SearXNG is a separate Docker service; this change does not start Docker or Vite from inside the FastAPI process.

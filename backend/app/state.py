@@ -10,6 +10,8 @@ class RuntimeState:
         self.daily_realised_pnl = 0.0
         self.daily_date = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
         self.connected = False
+        self.feed_status = "NOT_CONFIGURED"
+        self.feed_error = None
         self.last_feed_at = None
         self.kill_switch = True
         self.bot_enabled = False
@@ -24,6 +26,9 @@ class RuntimeState:
         self.intelligence_sources = []
         self.intelligence_updated_at = None
         self.intelligence_status = "NOT_REFRESHED"
+        self.intelligence_worker_status = "STOPPED"
+        self.intelligence_worker_last_run = None
+        self.intelligence_worker_error = None
         self.last_error = None
 
     def tick(self, symbol: str, data: dict):

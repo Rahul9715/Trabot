@@ -1,6 +1,6 @@
-# NSE AI Trading Desk — Development Release 2.3.0
+# NSE AI Trading Desk — Development Release 2.4.0
 
-> **Status: development prototype only.** This repository is the v2.3.0 development release, not a production release. Live order placement is disabled/unimplemented; `/api/orders/live` deliberately returns HTTP 501.
+> **Status: development prototype only.** This repository is the v2.4.0 development release, not a production release. Live order placement is disabled/unimplemented; `/api/orders/live` deliberately returns HTTP 501.
 
 ## Repository conventions
 
@@ -16,6 +16,10 @@
 - Do not connect a funded account or enable live trading with this release.
 - Never put credentials, OAuth tokens, passwords or client secrets in source control, screenshots or chat.
 
+## Background services and responsiveness
+
+FastAPI starts a periodic global-intelligence worker at launch (30-minute default; configurable) and auto-connects the Upstox feed when a current local access token and instrument keys are configured. The API reports worker/feed state. SearXNG remains a separately managed Docker service; start it before relying on SearXNG-backed refreshes. Slow research requests do not hold the browser controls or the FastAPI event loop.
+
 ## Multi-asset research
 
 The research endpoint supports equities and commodities across a user-selected region/venue, watchlist and time horizon. When web search is enabled, responses include structured source links and generation timestamps, and the source references are recorded in the audit ledger. Research is advisory only: it does not generate verified trading signals or place orders. Market data and broker execution remain limited to the prototype integrations described below; global live trading is not implemented.
@@ -26,7 +30,7 @@ The backend supports adapters for OpenAI, Anthropic Claude, Google Gemini, NVIDI
 
 ## Source baseline
 
-The v2.3.0 development release includes provider adapters, optional SearXNG research search, market/asset classification, region/category filters, a visible paper/live selector with live locked, candidate expiry, daily-sheet Excel export, dedicated dashboard tabs, and persistent agent/kill controls.
+The v2.4.0 development release includes provider adapters, optional SearXNG research search, market/asset classification, region/category filters, a visible paper/live selector with live locked, candidate expiry, daily-sheet Excel export, dedicated dashboard tabs, and persistent agent/kill controls.
 
 ## Local setup
 

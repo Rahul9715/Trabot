@@ -1,4 +1,4 @@
-﻿# Trabot 2.2.0 setup and configuration
+﻿# Trabot 2.4.0 setup and configuration
 
 This guide covers local installation, AI provider configuration, Upstox API configuration, and dashboard behavior. Keep this project in paper mode. It is a development prototype, not a production trading system.
 
@@ -45,7 +45,7 @@ npm.cmd install
 npm.cmd run dev
 ```
 
-Open the local URL Vite prints, usually `http://127.0.0.1:5173`. Restart the backend after any `.env` change. Never expose the development server publicly.
+Open the local URL Vite prints, usually `http://127.0.0.1:5173`. Restart the backend after any `.env` change. FastAPI starts the periodic intelligence worker automatically. The frontend and local SearXNG Docker container remain separate processes. Never expose the development server publicly.
 
 ## 3. Configure an AI provider
 
@@ -131,7 +131,7 @@ Upstox settings are also in `backend/.env`. AI research does not require Upstox;
 3. Put the app API key and secret in `UPSTOX_CLIENT_ID` and `UPSTOX_CLIENT_SECRET`.
 4. Keep `UPSTOX_MODE=sandbox` for development. `UPSTOX_SANDBOX_TOKEN` is a separate sandbox credential used only by sandbox order calls.
 5. `UPSTOX_ACCESS_TOKEN` is required by the current market-feed connector. Generate it through the Upstox OAuth flow or the Developer Apps dashboard and place it only in the local `.env`. Upstox access tokens expire on Upstox's schedule and must be refreshed when expired.
-6. Restart the backend and use the dashboard's market-feed control. The current dashboard subscribes to the configured NSE index keys; this is not a global equities or commodities feed.
+6. Set `UPSTOX_INSTRUMENT_KEYS` to comma-separated instrument keys. On FastAPI startup, the feed connects automatically when the access token and keys are present. The dashboard reports missing/expired-token status; clicking Connect retries the configured subscription. This is not a global equities or commodities feed.
 
 Relevant local variables:
 
@@ -140,6 +140,7 @@ UPSTOX_CLIENT_ID=your-app-key
 UPSTOX_CLIENT_SECRET=your-app-secret
 UPSTOX_REDIRECT_URI=http://127.0.0.1:8000/api/broker/upstox/callback
 UPSTOX_ACCESS_TOKEN=your-market-data-token
+UPSTOX_INSTRUMENT_KEYS=NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank
 UPSTOX_MODE=sandbox
 UPSTOX_SANDBOX_TOKEN=your-sandbox-token
 LIVE_TRADING_ENABLED=false
@@ -176,3 +177,10 @@ The app's `/api/broker/upstox/login` route returns an Upstox authorization URL a
 - [NVIDIA NIM LLM API reference](https://docs.api.nvidia.com/nim/reference/llm-apis)
 - [Upstox authentication](https://upstox.com/developer/api-documentation/authentication/) and [token exchange](https://upstox.com/developer/api-documentation/get-token/)
 
+
+
+## Automatic service startup and health
+
+FastAPI starts the global intelligence worker at launch and refreshes immediately, then every 30 minutes by default. Change `INTELLIGENCE_REFRESH_INTERVAL_MINUTES` (minimum 5 minutes) or set `INTELLIGENCE_AUTO_REFRESH=false` in `.env`; restart FastAPI after changes. The dashboard status exposes worker state and last attempt. With SearXNG selected, keep its Docker container running separately at `SEARXNG_BASE_URL`. If the provider key or SearXNG is unavailable, the main API remains online and reports refresh errors.
+
+The Upstox feed starts automatically only after a valid local token and a non-empty `UPSTOX_INSTRUMENT_KEYS` subscription are configured. A missing/expired token or invalid instrument is not silently treated as live data. Feed prices are not required to use advisory web research.

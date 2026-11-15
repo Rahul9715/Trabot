@@ -38,6 +38,11 @@ UPSTOX_CLIENT_ID = os.getenv("UPSTOX_CLIENT_ID", "")
 UPSTOX_CLIENT_SECRET = os.getenv("UPSTOX_CLIENT_SECRET", "")
 UPSTOX_REDIRECT_URI = os.getenv("UPSTOX_REDIRECT_URI", "http://127.0.0.1:8000/api/broker/upstox/callback")
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN", "")
+UPSTOX_INSTRUMENT_KEYS = [
+    item.strip() for item in os.getenv(
+        "UPSTOX_INSTRUMENT_KEYS", "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank"
+    ).split(",") if item.strip()
+]
 UPSTOX_MODE = os.getenv("UPSTOX_MODE", "sandbox").lower()
 UPSTOX_SANDBOX_TOKEN = os.getenv("UPSTOX_SANDBOX_TOKEN", "")
 
@@ -69,3 +74,5 @@ CANDIDATE_QUOTE_MAX_AGE_SECONDS = max(3, min(int(os.getenv("CANDIDATE_QUOTE_MAX_
 CANDIDATE_ENTRY_TOLERANCE_PERCENT = max(0.01, min(float(os.getenv("CANDIDATE_ENTRY_TOLERANCE_PERCENT", "0.25")), 10.0))
 
 INTELLIGENCE_MAX_AGE_MINUTES = int(os.getenv("INTELLIGENCE_MAX_AGE_MINUTES", "60"))
+INTELLIGENCE_AUTO_REFRESH = os.getenv("INTELLIGENCE_AUTO_REFRESH", "true").lower() == "true"
+INTELLIGENCE_REFRESH_INTERVAL_MINUTES = max(5, min(int(os.getenv("INTELLIGENCE_REFRESH_INTERVAL_MINUTES", "30")), 1440))

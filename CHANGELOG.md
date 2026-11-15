@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.0 - Responsive controls and startup-managed services
+- Replaced the page-wide pending flag with independent action states so research does not disable navigation, routine controls, or the emergency kill switch.
+- Added a FastAPI lifespan worker for immediate and periodic global-intelligence refresh, plus automatic Upstox feed startup when credentials and subscriptions are configured.
+- Exposed feed/worker health in status and clarified the missing Upstox token configuration response.
+- Added concurrency, startup, and feed-prerequisite tests; revalidated the SearXNG adapter and research route against a running local instance.
+
 ## 2.3.0 — Independent SearXNG research search
 - Added SearXNG as an optional search provider independent from AI_PROVIDER, including bounded queries, timeouts, JSON/error handling, result deduplication, source snippets and publication metadata.
 - NVIDIA and OpenAI-compatible model research can now receive externally retrieved source evidence without claiming provider-native search support.

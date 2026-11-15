@@ -1,4 +1,7 @@
-﻿import secrets
+import asyncio
+import secrets
+import threading
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, date, timedelta
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
@@ -11,6 +14,8 @@ from .upstox import UpstoxClient
 from .feed import feed
 from .config import (STARTING_CAPITAL, AI_API_KEY, AI_MODEL, AI_PROVIDER, AI_WEB_SEARCH_ENABLED,
                      RESEARCH_SEARCH_PROVIDER, SEARXNG_BASE_URL, SEARXNG_TIMEOUT_SECONDS,
+                     UPSTOX_ACCESS_TOKEN, UPSTOX_INSTRUMENT_KEYS,
+                     INTELLIGENCE_AUTO_REFRESH, INTELLIGENCE_REFRESH_INTERVAL_MINUTES,
                      LIVE_TRADING_ENABLED, LIVE_TRADING_ACK, UPSTOX_MODE,
                      INTELLIGENCE_MAX_AGE_MINUTES, CANDIDATE_PENDING_TTL_MINUTES,
                      CANDIDATE_QUOTE_MAX_AGE_SECONDS, CANDIDATE_ENTRY_TOLERANCE_PERCENT,
@@ -21,7 +26,52 @@ from .search_provider import search_searxng, format_search_evidence, SearchProvi
 from .excel_log import upsert_candidate, ensure_export
 from .schemas import Candidate, CandidateDecision, TradeUpdate
 
-app = FastAPI(title="AI Trading Desk", version="2.3.0")
+_intelligence_refresh_lock = threading.Lock()
+
+
+async def _intelligence_worker():
+    """Refresh cached global intelligence periodically without blocking API requests."""
+    if not INTELLIGENCE_AUTO_REFRESH:
+        state.intelligence_worker_status = "DISABLED"
+        return
+    state.intelligence_worker_status = "RUNNING"
+    while True:
+        state.intelligence_worker_last_run = datetime.now(timezone.utc).isoformat()
+        try:
+            await asyncio.to_thread(refresh_intelligence, IntelligenceRefresh())
+            state.intelligence_worker_status = "RUNNING"
+            state.intelligence_worker_error = None
+        except Exception as exc:
+            state.intelligence_worker_status = "WAITING_CONFIGURATION" if not AI_API_KEY else "ERROR"
+            state.intelligence_worker_error = str(exc)
+            state.last_error = str(exc)
+        await asyncio.sleep(INTELLIGENCE_REFRESH_INTERVAL_MINUTES * 60)
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Start internal research and any configured market feed with FastAPI."""
+    init_audit()
+    research_task = asyncio.create_task(_intelligence_worker(), name="global-intelligence-worker")
+    if UPSTOX_ACCESS_TOKEN and UPSTOX_INSTRUMENT_KEYS:
+        try:
+            await asyncio.to_thread(feed.start, UPSTOX_INSTRUMENT_KEYS)
+        except Exception:
+            state.feed_status = "ERROR"
+            state.feed_error = "Upstox feed could not initialize. Check the SDK installation, token, and subscription keys."
+    else:
+        state.feed_status = "CONFIGURATION_REQUIRED"
+        state.feed_error = "Set UPSTOX_ACCESS_TOKEN and UPSTOX_INSTRUMENT_KEYS in backend/.env to start the Upstox feed automatically."
+    try:
+        yield
+    finally:
+        research_task.cancel()
+        await asyncio.gather(research_task, return_exceptions=True)
+        feed.stop()
+        state.intelligence_worker_status = "STOPPED"
+
+
+app = FastAPI(title="AI Trading Desk", version="2.4.0", lifespan=lifespan)
 init_audit()
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 upstox = UpstoxClient()
@@ -139,6 +189,15 @@ def status():
         "ai_configured": bool(AI_API_KEY), "ai_provider": AI_PROVIDER,
         "ai_model": AI_MODEL or None, "ai_web_search_enabled": AI_WEB_SEARCH_ENABLED,
         "research_search_provider": RESEARCH_SEARCH_PROVIDER,
+        "intelligence_worker_status": state.intelligence_worker_status,
+        "intelligence_worker_last_run": state.intelligence_worker_last_run,
+        "intelligence_worker_error": state.intelligence_worker_error,
+        "intelligence_auto_refresh": INTELLIGENCE_AUTO_REFRESH,
+        "intelligence_refresh_interval_minutes": INTELLIGENCE_REFRESH_INTERVAL_MINUTES,
+        "feed_status": state.feed_status,
+        "feed_error": state.feed_error,
+        "feed_token_configured": bool(UPSTOX_ACCESS_TOKEN),
+        "feed_instrument_count": len(UPSTOX_INSTRUMENT_KEYS),
         "broker": "Upstox integration target",
         "kill_switch": state.kill_switch, "bot_enabled": state.bot_enabled,
         "bot_status": state.bot_status, "autonomous_mode": state.autonomous_mode,
@@ -266,6 +325,15 @@ def reset_kill_switch():
 
 @app.post("/api/intelligence/refresh")
 def refresh_intelligence(req: IntelligenceRefresh):
+    if not _intelligence_refresh_lock.acquire(blocking=False):
+        raise HTTPException(409, "An intelligence refresh is already running. Other dashboard controls remain available.")
+    try:
+        return _refresh_intelligence(req)
+    finally:
+        _intelligence_refresh_lock.release()
+
+
+def _refresh_intelligence(req: IntelligenceRefresh):
     if not AI_API_KEY:
         state.intelligence_status = "CONFIGURATION_REQUIRED"
         raise HTTPException(503, "Set the selected provider's API key in backend/.env to refresh global market intelligence.")
@@ -298,6 +366,7 @@ Separate verified facts, interpretation and uncertainty. No fabricated FII/DII f
         state.intelligence_sources = sources
         state.intelligence_updated_at = datetime.now(timezone.utc).isoformat()
         state.intelligence_status = "UPDATED"
+        state.intelligence_worker_error = None
         state.last_error = None
         record_event("GLOBAL_INTELLIGENCE_BRIEF", {"brief": state.intelligence, "sources": state.intelligence_sources, "provider": result.provider, "model": result.model, "search_provider": search_provider, "search_used": search_used, "search_supported": result.search_supported, "updated_at": state.intelligence_updated_at})
         return {"status":"UPDATED", "updated_at":state.intelligence_updated_at,
@@ -321,23 +390,36 @@ Separate verified facts, interpretation and uncertainty. No fabricated FII/DII f
 @app.get("/api/intelligence/latest")
 def latest_intelligence():
     return {"status":state.intelligence_status, "updated_at":state.intelligence_updated_at,
-            "brief":state.intelligence, "sources":state.intelligence_sources, "readiness":readiness()}
+            "brief":state.intelligence, "sources":state.intelligence_sources, "readiness":readiness(),
+            "worker_status":state.intelligence_worker_status,
+            "worker_last_run":state.intelligence_worker_last_run,
+            "worker_error":state.intelligence_worker_error}
 
 @app.post("/api/market/connect")
 def connect_market(payload: dict):
+    keys = payload.get("instrument_keys") or UPSTOX_INSTRUMENT_KEYS
+    if not UPSTOX_ACCESS_TOKEN:
+        detail = "Upstox feed cannot connect yet: UPSTOX_ACCESS_TOKEN is missing. Complete Upstox OAuth, put the current token in backend/.env, and restart FastAPI."
+        state.feed_status = "CONFIGURATION_REQUIRED"
+        state.feed_error = detail
+        raise HTTPException(409, detail)
+    if not keys or len(keys) > 100:
+        detail = "Configure 1–100 Upstox instrument keys in UPSTOX_INSTRUMENT_KEYS in backend/.env."
+        state.feed_status = "CONFIGURATION_REQUIRED"
+        state.feed_error = detail
+        raise HTTPException(400, detail)
     try:
-        keys = payload.get("instrument_keys", [])
-        if not keys or len(keys) > 100:
-            raise ValueError("Supply 1–100 valid Upstox instrument keys.")
         feed.start(keys)
         record_event("MARKET_FEED_CONNECT_REQUESTED", {"instrument_keys": keys})
-        return {"started": True, "instrument_keys": keys}
-    except Exception as e:
-        raise HTTPException(400, str(e))
+        return {"started": True, "feed_status": state.feed_status, "instrument_keys": keys}
+    except Exception:
+        state.feed_status = "ERROR"
+        state.feed_error = "Upstox feed could not initialize. Check the SDK installation, token, subscription keys, and backend log."
+        raise HTTPException(502, state.feed_error)
 
 @app.get("/api/market/latest")
 def latest():
-    return {"connected": state.connected, "ticks": state.ticks, "last_feed_at": state.last_feed_at}
+    return {"connected": state.connected, "status": state.feed_status, "error": state.feed_error, "ticks": state.ticks, "last_feed_at": state.last_feed_at}
 
 @app.websocket("/ws/market")
 async def market_ws(ws: WebSocket):
