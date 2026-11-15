@@ -8,8 +8,31 @@ MAX_RISK_PER_TRADE = float(os.getenv("MAX_RISK_PER_TRADE", "50"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "1"))
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
+AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").strip().lower()
+_provider_key_names = {
+    "openai": ("AI_API_KEY", "OPENAI_API_KEY"),
+    "anthropic": ("AI_API_KEY", "ANTHROPIC_API_KEY"),
+    "gemini": ("AI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "nvidia": ("AI_API_KEY", "NVIDIA_API_KEY"),
+    "openai_compatible": ("AI_API_KEY",),
+}
+AI_API_KEY = next((os.getenv(name, "").strip() for name in _provider_key_names.get(AI_PROVIDER, ("AI_API_KEY",)) if os.getenv(name, "").strip()), "")
+_provider_model_names = {
+    "openai": ("AI_MODEL", "OPENAI_MODEL"),
+    "anthropic": ("AI_MODEL", "ANTHROPIC_MODEL"),
+    "gemini": ("AI_MODEL", "GEMINI_MODEL"),
+    "nvidia": ("AI_MODEL", "NVIDIA_MODEL"),
+    "openai_compatible": ("AI_MODEL",),
+}
+AI_MODEL = next((os.getenv(name, "").strip() for name in _provider_model_names.get(AI_PROVIDER, ("AI_MODEL",)) if os.getenv(name, "").strip()), "")
+if AI_PROVIDER == "openai" and not AI_MODEL:
+    AI_MODEL = "gpt-5"
+AI_BASE_URL = os.getenv("AI_BASE_URL", "").strip().rstrip("/")
+AI_TIMEOUT_SECONDS = max(5, min(int(os.getenv("AI_TIMEOUT_SECONDS", "60")), 180))
+
+# Backward-compatible names for older local .env files and existing UI clients.
+OPENAI_API_KEY = AI_API_KEY if AI_PROVIDER == "openai" else ""
+OPENAI_MODEL = AI_MODEL
 
 UPSTOX_CLIENT_ID = os.getenv("UPSTOX_CLIENT_ID", "")
 UPSTOX_CLIENT_SECRET = os.getenv("UPSTOX_CLIENT_SECRET", "")
@@ -27,5 +50,15 @@ if UPSTOX_MODE not in {"sandbox", "live"}:
     raise RuntimeError("UPSTOX_MODE must be sandbox or live.")
 
 AI_WEB_SEARCH_ENABLED = os.getenv("AI_WEB_SEARCH_ENABLED", "true").lower() == "true"
+
+if AI_PROVIDER not in {"openai", "anthropic", "gemini", "nvidia", "openai_compatible"}:
+    raise RuntimeError("AI_PROVIDER must be openai, anthropic, gemini, nvidia, or openai_compatible.")
+if AI_PROVIDER == "openai_compatible" and not AI_BASE_URL:
+    raise RuntimeError("AI_BASE_URL is required when AI_PROVIDER=openai_compatible.")
+
+KILL_SWITCH_RESET_ALLOWED = os.getenv("KILL_SWITCH_RESET_ALLOWED", "true").lower() == "true"
+CANDIDATE_PENDING_TTL_MINUTES = max(1, min(int(os.getenv("CANDIDATE_PENDING_TTL_MINUTES", "30")), 1440))
+CANDIDATE_QUOTE_MAX_AGE_SECONDS = max(3, min(int(os.getenv("CANDIDATE_QUOTE_MAX_AGE_SECONDS", "30")), 3600))
+CANDIDATE_ENTRY_TOLERANCE_PERCENT = max(0.01, min(float(os.getenv("CANDIDATE_ENTRY_TOLERANCE_PERCENT", "0.25")), 10.0))
 
 INTELLIGENCE_MAX_AGE_MINUTES = int(os.getenv("INTELLIGENCE_MAX_AGE_MINUTES", "60"))

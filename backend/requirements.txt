@@ -4,6 +4,9 @@ pydantic>=2.10
 python-dotenv>=1.0
 httpx>=0.27
 openai>=1.70
+anthropic>=0.49
+google-genai>=1.0
+openpyxl>=3.1
 upstox-python-sdk>=2.23
 
 pytest>=8.3

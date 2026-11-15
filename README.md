@@ -1,6 +1,6 @@
-# NSE AI Trading Desk — Development Release 2.0
+﻿# NSE AI Trading Desk — Development Release 2.1.0
 
-> **Status: development prototype only.** This repository is the v2.0 baseline, not a production release. Live order placement is disabled/unimplemented; `/api/orders/live` deliberately returns HTTP 501.
+> **Status: development prototype only.** This repository is the v2.1.0 development release, not a production release. Live order placement is disabled/unimplemented; `/api/orders/live` deliberately returns HTTP 501.
 
 ## Repository conventions
 
@@ -20,9 +20,13 @@
 
 The research endpoint supports equities and commodities across a user-selected region/venue, watchlist and time horizon. When web search is enabled, responses include structured source links and generation timestamps, and the source references are recorded in the audit ledger. Research is advisory only: it does not generate verified trading signals or place orders. Market data and broker execution remain limited to the prototype integrations described below; global live trading is not implemented.
 
+## AI provider compatibility and setup
+
+The backend supports adapters for OpenAI, Anthropic Claude, Google Gemini, NVIDIA NIM, and custom OpenAI-compatible chat-completions APIs. Grounding and source citations differ by provider; only supported adapters claim those capabilities. See [SETUP_GUIDE.md](SETUP_GUIDE.md) for Upstox and AI configuration. AI research is advisory; confidence is not a calibrated win probability.
+
 ## Source baseline
 
-The v2.0 development baseline includes a FastAPI backend, React/Vite frontend, SQLite append-only audit ledger with SHA-256 hash chain, candidate review fields, paper-trade suggested-versus-actual values, daily-loss reset controls, and light/dark dashboard theme.
+The v2.1.0 development release includes provider adapters, candidate expiry, daily-sheet Excel export, dedicated filtered dashboard tabs, persistent agent/kill controls, semi/full paper-permission selection, and a light/dark theme.
 
 ## Local setup
 
@@ -56,10 +60,12 @@ python -m pytest -q tests
 python -m compileall -q app
 ```
 
-See `ARCHITECTURE.md`, `CHANGELOG.md`, `REVIEW_REPORT.md`, `CODEX.md` and `SECURITY.md` before changing execution, risk or audit code.
+See `SETUP_GUIDE.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `REVIEW_REPORT.md`, `CODEX.md` and `SECURITY.md` before changing execution, risk or audit code.
 
 ## Outstanding work
 
 Durable event-sourced recovery, autonomous NSE scan and strategy scheduling, statistically calibrated confidence, portfolio allocation, genuinely independent review, complete broker order/fill lifecycle, asynchronous evidence archival, UI end-to-end testing, authentication/security hardening, and compliance review remain outstanding.
 
 A passing health/readiness check is not proof of production readiness and is not a trade signal.
+
+

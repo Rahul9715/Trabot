@@ -37,3 +37,12 @@ These three passes were performed by the same assistant in separate functional, 
 - There is no backtest/forward-test dataset or calibrated performance record. A 90–100% win-rate target cannot be supported or verified from this repository.
 - The research enhancement adds scope controls and source provenance, but does not change order execution or turn research output into a signal.
 - This follow-up is a code inspection only; no automated tests or build were run for these changes.
+
+## Release 2.1.0 implementation review
+
+- Added provider adapters for OpenAI, Anthropic, Gemini, NVIDIA NIM and OpenAI-compatible chat-completions APIs. Provider-grounding support differs; ungrounded adapters do not claim search capability, and readiness still requires sources.
+- Added daily Excel mirrors for candidate lifecycle records; the audit hash-chain remains canonical. Candidate expiry is evaluated on reads/decisions and therefore is not a continuously running background timer.
+- Added dashboard-wide emergency controls and filtered trade/suggestion/audit tabs. Engaging the emergency switch now also stops the agent and clears full-mode permission; resetting it leaves the agent stopped.
+- Full mode remains paper-mode permission only; there is no production scanner, calibrated win-rate evidence, durable trade-state recovery or global broker feed. Live order submission is still disabled.
+- Setup is documented in `SETUP_GUIDE.md`. Tests, package installation, and frontend build were not run for this release.
+- The existing `frontend/package-lock.json` was untracked before this work and was left untouched and unstaged.

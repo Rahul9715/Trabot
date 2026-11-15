@@ -1,8 +1,11 @@
 import React, {useEffect, useState} from 'react';
-import {Activity, ShieldCheck, RadioTower, BrainCircuit, Power, RefreshCw, AlertTriangle, Bot, Globe, LockKeyhole} from 'lucide-react';
+import {Activity, ShieldCheck, RadioTower, BrainCircuit, Power, RefreshCw, AlertTriangle, Bot, Globe, LockKeyhole, FileSpreadsheet, ListFilter, LayoutDashboard} from 'lucide-react';
 
 const API='http://127.0.0.1:8000';
+const TABS=[['overview','Overview'],['trades','Trades'],['suggestions','Suggested trades'],['audit','Audit ledger']];
+
 export default function App(){
+  const [tab,setTab]=useState('overview');
   const [status,setStatus]=useState({});
   const [account,setAccount]=useState({});
   const [orders,setOrders]=useState([]);
@@ -18,153 +21,184 @@ export default function App(){
   const [analysisHorizon,setAnalysisHorizon]=useState('swing');
   const [analysisQuestion,setAnalysisQuestion]=useState('Assess current market evidence, regime, risks and conditional scenarios.');
   const [lossLimit,setLossLimit]=useState('');
-  const [auto,setAuto]=useState(false);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
   const [audit,setAudit]=useState([]);
   const [theme,setTheme]=useState(()=>localStorage.getItem('nse-theme')||'dark');
+  const [tradeFilters,setTradeFilters]=useState({symbol:'',status:'',side:''});
+  const [candidateFilters,setCandidateFilters]=useState({symbol:'',status:'',side:'',confidence:''});
+  const [auditFilters,setAuditFilters]=useState({q:'',event_type:'',date_from:'',date_to:''});
+
   async function call(path,method='GET',body){
     const r=await fetch(API+path,{method,headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
-    const j=await r.json(); if(!r.ok) throw Error(j.detail||'Request failed'); return j;
+    const contentType=r.headers.get('content-type')||'';
+    const result=contentType.includes('application/json')?await r.json():await r.text();
+    if(!r.ok) throw Error(result?.detail||result||'Request failed');
+    return result;
   }
   async function refresh(){
     try{
       const [s,a,o,m,i,ev,cs]=await Promise.all([
-        call('/api/status'),call('/api/account'),call('/api/orders'),call('/api/market/latest'),call('/api/intelligence/latest'),call('/api/audit/events?limit=30'),call('/api/candidates')
+        call('/api/status'),call('/api/account'),call('/api/orders'),call('/api/market/latest'),
+        call('/api/intelligence/latest'),call('/api/audit/events?limit=500'),call('/api/candidates')
       ]);
-      setStatus(s);setAccount(a);setOrders(o);setTicks(m.ticks||{});setResearch(i.brief||'');setIntelSources(i.sources||[]);setAudit(ev||[]);setCandidates(cs||[]);
-      setAuto(!!s.autonomous_mode);
+      setStatus(s);setAccount(a);setOrders(o);setTicks(m.ticks||{});
+      setResearch(i.brief||'');setIntelSources(i.sources||[]);setAudit(ev||[]);setCandidates(cs||[]);
     }catch(e){setError('Backend not reachable. Start FastAPI on port 8000.')}
   }
   useEffect(()=>{document.documentElement.dataset.theme=theme;localStorage.setItem('nse-theme',theme)},[theme]);
-  useEffect(()=>{refresh();const t=setInterval(refresh,2500);return()=>clearInterval(t)},[]);
-  async function startBot(){
+  useEffect(()=>{refresh();const t=setInterval(refresh,5000);return()=>clearInterval(t)},[]);
+
+  async function action(fn, success){
     setBusy(true);setError('');setNotice('');
-    try{
-      const r=await call('/api/bot','POST',{enabled:true});
-      setNotice(r.message);
-      await refresh();
-    }catch(e){setError(e.message)}finally{setBusy(false)}
+    try{const result=await fn();setNotice(typeof success==='function'?success(result):success);await refresh();return result}
+    catch(e){setError(e.message);return null}finally{setBusy(false)}
   }
-  async function stopBot(){
-    setBusy(true);try{await call('/api/bot','POST',{enabled:false});setAuto(false);setNotice('Bot stopped. Autonomous permission revoked.');await refresh()}catch(e){setError(e.message)}finally{setBusy(false)}
-  }
-  async function kill(){
-    try{await call('/api/kill-switch','POST',{});setAuto(false);setNotice('Kill switch engaged. New orders blocked immediately.');await refresh()}catch(e){setError(e.message)}
+  const startBot=()=>action(()=>call('/api/bot','POST',{enabled:true}),r=>r.message||'Agent started.');
+  const stopBot=()=>action(()=>call('/api/bot','POST',{enabled:false}),'Agent stopped. Autonomous permission revoked.');
+  const engageKill=()=>action(()=>call('/api/kill-switch','POST',{}),'Emergency kill switch engaged.');
+  const resetKill=()=>action(()=>call('/api/kill-switch/reset','POST',{}),r=>r.message||'Kill switch reset; agent remains stopped.');
+  const changeMode=(mode)=>{
+    if(mode==='full'&&(!lossLimit||Number(lossLimit)<=0)){setNotice('Set a positive daily loss limit below before enabling full mode.');return}
+    return action(()=>call('/api/bot/mode','POST',{mode,max_daily_loss:mode==='full'?Number(lossLimit):null}),r=>r.message||'Operating mode updated.');
+  };
+  const connectFeed=()=>action(()=>call('/api/market/connect','POST',{instrument_keys:['NSE_INDEX|Nifty 50','NSE_INDEX|Nifty Bank']}),'Market feed connection requested.');
+  const resetDailyLock=()=>action(()=>call('/api/daily-lock/reset','POST',{}),r=>r.reset?'Daily loss lock reset. Autonomy remains off.':r.message);
+  const decideCandidate=(id,decision)=>action(()=>call(`/api/candidates/${id}/decision`,'POST',{decision,reason:`${decision} from dashboard`}),`Suggestion ${decision.toLowerCase()}.`);
+  const verifyAudit=()=>action(()=>call('/api/audit/verify'),r=>r.valid?`Audit chain verified: ${r.verified_events} events.`:`Audit chain integrity failure at sequence ${r.failed_seq}.`);
+
+  async function refreshIntelligence(){
+    await action(()=>call('/api/intelligence/refresh','POST',{extra_context:context}),r=>{
+      setResearch(r.brief||'');setIntelSources(r.sources||[]);
+      return r.sources?.length?`Intelligence updated with ${r.sources.length} source references.`:'Intelligence updated, but no source references were returned; readiness remains blocked.';
+    });
   }
   async function runResearch(){
-    setBusy(true);setError('');setNotice('Running multi-asset research with source checks…');
+    setBusy(true);setError('');setNotice('Running provider-backed research with source checks…');
     try{
-      const instruments=analysisInstruments.split(',').map(x=>x.trim()).filter(Boolean);
-      const r=await call('/api/research','POST',{
-        market_context:context,
-        question:analysisQuestion,
-        asset_class:analysisClass,
-        region:analysisRegion,
-        instruments,
-        horizon:analysisHorizon
+      const result=await call('/api/research','POST',{
+        market_context:context,question:analysisQuestion,asset_class:analysisClass,region:analysisRegion,
+        instruments:analysisInstruments.split(',').map(x=>x.trim()).filter(Boolean),horizon:analysisHorizon
       });
-      setAnalysis(r);
-      setNotice(r.sources?.length?'Research complete with '+r.sources.length+' source references.':'Research complete, but the response returned no structured source references.');
+      setAnalysis(result);setNotice(result.sources?.length?`Research complete with ${result.sources.length} sources.`:'Research returned no structured source references.');
     }catch(e){setError(e.message)}finally{setBusy(false)}
   }
-  async function refreshIntelligence(){
-    setBusy(true);setError('');setNotice('Refreshing global geopolitical and market intelligence…');
-    try{
-      const r=await call('/api/intelligence/refresh','POST',{extra_context:context});
-      setResearch(r.brief);setIntelSources(r.sources||[]);setNotice(r.sources?.length?'Global intelligence updated with '+r.sources.length+' source references.':'Global intelligence updated without structured source references; readiness remains blocked.');await refresh();
-    }catch(e){setError(e.message)}finally{setBusy(false)}
-  }
-  async function connectFeed(){
-    setBusy(true);setError('');
-    try{
-      await call('/api/market/connect','POST',{instrument_keys:['NSE_INDEX|Nifty 50','NSE_INDEX|Nifty Bank']});
-      setNotice('Market feed connection requested. Waiting for fresh ticks.');
-    }catch(e){setError(e.message)}finally{setBusy(false)}
-  }
-  async function decideCandidate(id,decision){
-    try{await call(`/api/candidates/${id}/decision`,'POST',{decision,reason:decision==='REJECTED'?'Rejected from dashboard':'Approved from dashboard'});setNotice(`Candidate ${id}: ${decision}`);await refresh()}catch(e){setError(e.message)}
-  }
-  async function resetDailyLock(){
-    setError('');setNotice('');
-    try{const r=await call('/api/daily-lock/reset','POST',{});setNotice(r.reset?'Daily loss lock reset. Cumulative P&L retained; re-enable autonomy explicitly.':r.message);await refresh()}catch(e){setError(e.message)}
-  }
-  async function setAutonomy(enabled){
-    setError('');setNotice('');
-    try{
-      const r=await call('/api/autonomy','POST',{enabled,max_daily_loss:enabled?Number(lossLimit):null});
-      setAuto(!!r.autonomous_mode);setNotice(r.message);await refresh();
-    }catch(e){setError(e.message)}
-  }
-  const tickRows=Object.entries(ticks).map(([symbol,v])=>({symbol,ltp:v.ltp,received:v.received_at}));
+
   const ready=status.readiness?.ready;
+  const tickRows=Object.entries(ticks).map(([symbol,v])=>({symbol,ltp:v.ltp,received:v.received_at}));
+  const filteredTrades=orders.filter(o=>(!tradeFilters.symbol||String(o.symbol||'').toLowerCase().includes(tradeFilters.symbol.toLowerCase()))&&(!tradeFilters.status||o.status===tradeFilters.status)&&(!tradeFilters.side||o.side===tradeFilters.side));
+  const filteredCandidates=candidates.filter(c=>(!candidateFilters.symbol||String(c.symbol||'').toLowerCase().includes(candidateFilters.symbol.toLowerCase()))&&(!candidateFilters.status||c.status===candidateFilters.status)&&(!candidateFilters.side||c.side===candidateFilters.side)&&(candidateFilters.confidence===''||Number(c.confidence)>=Number(candidateFilters.confidence)));
+  const filteredAudit=audit.filter(e=>(!auditFilters.event_type||String(e.event_type||'').toLowerCase().includes(auditFilters.event_type.toLowerCase()))&&(!auditFilters.q||`${e.entity_id||''} ${e.event_type||''} ${JSON.stringify(e.payload||{})}`.toLowerCase().includes(auditFilters.q.toLowerCase()))&&(!auditFilters.date_from||String(e.occurred_at||'').slice(0,10)>=auditFilters.date_from)&&(!auditFilters.date_to||String(e.occurred_at||'').slice(0,10)<=auditFilters.date_to));
+  const isBotOn=!!status.bot_enabled;
+  const isKillActive=!!status.kill_switch;
+  const mode=status.operating_mode==='FULL'?'full':'semi';
+
   return <div className="shell">
-    <header><div><div className="eyebrow">LOCAL TRADING TERMINAL · LIVE INTELLIGENCE · PAPER EXECUTION</div><h1>NSE AI Trading Desk</h1><p>Global research · Market data · Approval controls · Risk management</p></div><div className="header-right"><button className="secondary" onClick={()=>setTheme(theme==='dark'?'light':'dark')}>{theme==='dark'?'☀ Light mode':'☾ Dark mode'}</button><span className="pill green">LIVE ORDERS DISABLED</span><span className={'pill '+(ready?'green':'amber')}>{status.readiness?.status||'CHECKING'}</span></div></header>
+    <div className="sticky-shell">
+      <header className="topbar">
+        <div className="agent-controls">
+          <button onClick={isBotOn?stopBot:startBot} disabled={busy||(!isBotOn&&isKillActive)} className={isBotOn?'secondary':''}>
+            <Power size={15}/>{isBotOn?'Stop agent':'Start agent'}
+          </button>
+          <button onClick={isKillActive?resetKill:engageKill} disabled={busy} className={isKillActive?'danger':'danger'}>
+            <ShieldCheck size={15}/>{isKillActive?'Reset kill switch':'Kill switch'}
+          </button>
+        </div>
+        <div className="brand"><div className="eyebrow">PAPER EXECUTION · SOURCE-BACKED RESEARCH</div><h1>Trabot</h1></div>
+        <div className="header-right">
+          <button className="secondary" onClick={()=>setTheme(theme==='dark'?'light':'dark')}>{theme==='dark'?'☀ Light':'☾ Dark'}</button>
+          <span className={'pill '+(isKillActive?'red-pill':ready?'green':'amber')}>{isKillActive?'KILL SWITCH ACTIVE':ready?'READY':isBotOn?'CHECKS PENDING':'AGENT STOPPED'}</span>
+        </div>
+      </header>
+      <nav className="tab-bar" aria-label="Dashboard sections">
+        {TABS.map(([id,label])=><button key={id} className={tab===id?'tab active':'tab'} onClick={()=>setTab(id)}>{label}</button>)}
+      </nav>
+    </div>
     {error&&<div className="error"><AlertTriangle size={16}/>{error}</div>}
     {notice&&<div className="notice">{notice}</div>}
-    <section className="stats">
-      <Metric title="Starting capital" value={'₹'+(account.starting_capital||10000).toLocaleString('en-IN')}/>
-      <Metric title="Daily P&L (incl. open)" value={'₹'+(account.daily_pnl||0).toLocaleString('en-IN')}/>
-      <Metric title="Open positions" value={account.open_positions??0}/>
-      <Metric title="Daily orders" value={account.orders_today??0}/>
-    </section>
-    <section className="panel control-panel">
-      <div className="panel-title"><Bot/> Bot master control</div>
-      <div className="control-row">
-        <div><b>Bot power</b><p className="muted">Independent of manual or autonomous mode. Turning OFF revokes autonomous permission.</p></div>
-        <div className="actions"><button onClick={startBot} disabled={busy||status.bot_enabled}> <Power size={14}/> Start bot</button><button className="secondary" onClick={stopBot} disabled={busy||!status.bot_enabled}>Stop bot</button></div>
-      </div>
-      <div className="readiness">
-        <div className={'ready-dot '+(ready?'on':'')}></div>
-        <div><b>System status: {ready?'READY':status.bot_enabled?'STARTING – checks pending':'STOPPED'}</b><p className="muted">READY requires bot ON, fresh market feed, refreshed global intelligence and kill switch released.</p></div>
-      </div>
-      <div className="checks">
-        {Object.entries(status.readiness?.checks||{}).map(([k,v])=><span className={'check '+(v?'ok':'pending')} key={k}>{v?'✓':'○'} {k.replaceAll('_',' ')}</span>)}
-      </div>
-    </section>
-    <section className="grid">
-      <div className="panel"><div className="panel-title"><RadioTower/> NSE market feed <button onClick={connectFeed} disabled={busy}>Connect feed</button></div><p className="muted">Upstox V3 stream. READY requires fresh incoming ticks. Subscription permissions and valid instrument keys apply.</p>
-        <table><thead><tr><th>Instrument key</th><th>Last price</th><th>Received (UTC)</th></tr></thead><tbody>{tickRows.length?tickRows.map(x=><tr key={x.symbol}><td>{x.symbol}</td><td>{x.ltp}</td><td>{x.received}</td></tr>):<tr><td colSpan="3">No ticks received yet</td></tr>}</tbody></table>
-      </div>
-      <div className="panel"><div className="panel-title"><ShieldCheck/> Safety controls <button className="danger" onClick={kill}><Power size={14}/> Kill switch</button></div>
-        <div className="kv"><span>Execution mode</span><b>Paper only</b></div><div className="kv"><span>Live orders</span><b className="red">Disabled</b></div><div className="kv"><span>Kill switch</span><b>{status.kill_switch?'ACTIVE':'Released'}</b></div><div className="kv"><span>AI configured</span><b>{status.ai_configured?'Yes':'API key missing'}</b></div><div className="kv"><span>Global intelligence</span><b>{status.intelligence_status||'Not refreshed'}</b></div>
-      </div>
-    </section>
-    <section className="panel autonomy">
-      <div className="panel-title"><LockKeyhole/> Trading authority</div>
-      <div className="control-row">
-        <div><b>Fully autonomous paper mode</b><p className="muted">Requires the bot to be READY and a configurable daily loss limit. Reaching it locks autonomous entries until you reset the daily lock. The emergency kill switch remains independent.</p></div>
-        <span className={'pill '+(auto?'green':'amber')}>{auto?'AUTONOMOUS ON':'AUTONOMOUS OFF'}</span>
-      </div>
-      <div className="autonomy-form"><label>Autonomous loss allowance (₹)<input type="number" min="1" step="1" value={lossLimit} onChange={e=>setLossLimit(e.target.value)} placeholder="Set your session limit"/></label><div className="actions"><button onClick={()=>setAutonomy(true)} disabled={busy||auto||!status.bot_enabled||!ready||!lossLimit||Number(lossLimit)<=0||false}>Enable autonomous mode</button><button className="secondary" onClick={()=>setAutonomy(false)} disabled={!auto}>Disable autonomous mode</button></div></div>
-      <div className="control-row lock-row"><div><b>Daily loss lock: {status.daily_loss_lock?'ACTIVE':'Clear'}</b><p className="muted small">Reset establishes a fresh allowance baseline from current P&amp;L. It never erases the day's cumulative P&amp;L and does not re-enable autonomy.</p></div><button className="secondary" onClick={resetDailyLock} disabled={!status.daily_loss_lock}>Reset daily lock</button></div><p className="muted small">The current release adds durable audit records and the daily-lock reset control. Full autonomous strategy scheduling and live broker execution remain disabled pending implementation and verification.</p>
-    </section>
-    <section className="panel research"><div className="panel-title"><Globe/> Global geopolitics & market intelligence <button onClick={refreshIntelligence} disabled={busy}>Refresh intelligence</button></div>
-      <p className="muted">Coverage includes all material geopolitical flashpoints, wars, sanctions, shipping routes, oil, gas, metals, commodities, global macro, central banks and direct/indirect sector transmission to Indian markets. Refresh before the session and whenever a major event breaks.</p>
-      <textarea value={context} onChange={e=>setContext(e.target.value)} placeholder="Optional: add context, watchlist, or specific concerns…" rows="3"/>
-      {research?<pre className="research-output">{research}</pre>:<p className="muted">No global intelligence brief yet. Refresh to establish the news-readiness check.</p>}
-      {intelSources.length>0&&<ul className="source-list">{intelSources.map((s,i)=><li key={s.url}><a href={s.url} target="_blank" rel="noreferrer">{s.title}</a> <span className="muted small">({s.kind})</span></li>)}</ul>}
-      <div className="muted small">Last refresh: {status.readiness?.intelligence_last_update||'Never'} · Freshness window: 60 minutes</div>
-    </section>
-    <section className="panel analysis-panel">
-      <div className="panel-title"><BrainCircuit/> Multi-asset research</div>
-      <p className="muted">Research global equities, commodities, or both. Reports include source references, data-quality caveats and bull/base/bear scenarios. Research does not place orders.</p>
-      <div className="analysis-form">
-        <label>Asset class<select value={analysisClass} onChange={e=>setAnalysisClass(e.target.value)}><option value="both">Equities & commodities</option><option value="equities">Equities</option><option value="commodities">Commodities</option></select></label>
-        <label>Region or venues<input value={analysisRegion} onChange={e=>setAnalysisRegion(e.target.value)} placeholder="Global, US, India, LME…"/></label>
-        <label>Instruments<input value={analysisInstruments} onChange={e=>setAnalysisInstruments(e.target.value)} placeholder="Optional, comma-separated symbols or contracts"/></label>
-        <label>Horizon<select value={analysisHorizon} onChange={e=>setAnalysisHorizon(e.target.value)}><option value="intraday">Intraday</option><option value="swing">Swing</option><option value="position">Position</option></select></label>
-      </div>
-      <textarea value={analysisQuestion} onChange={e=>setAnalysisQuestion(e.target.value)} rows="2" placeholder="Research question…"/>
-      <div className="control-row"><span className="muted small">Optional market context above is treated as unverified unless independently sourced.</span><button onClick={runResearch} disabled={busy||analysisQuestion.trim().length<5}>Run research</button></div>
-      {analysis&&<><pre className="research-output">{analysis.research}</pre><div className="muted small">Generated {analysis.generated_at} · {analysis.model} · Web search {analysis.web_search_enabled?'enabled':'disabled'} · {analysis.scope?.asset_class} / {analysis.scope?.region} / {analysis.scope?.horizon}</div>
-        {analysis.sources?.length>0&&<ul className="source-list">{analysis.sources.map((s,i)=><li key={s.url}><a href={s.url} target="_blank" rel="noreferrer">{s.title}</a> <span className="muted small">({s.kind})</span></li>)}</ul>}
-      </>}
-    </section>
-    <section className="panel"><div className="panel-title"><Activity/> Order book <button onClick={refresh}><RefreshCw size={14}/> Refresh</button></div><table><thead><tr><th>Signal</th><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>Target</th><th>Qty</th><th>Status</th></tr></thead><tbody>{orders.length?orders.map((o,i)=><tr key={o.signal_id||i}><td>{o.signal_id}</td><td>{o.symbol}</td><td>{o.side}</td><td>{o.entry}</td><td>{o.stop_loss}</td><td>{o.target}</td><td>{o.quantity}</td><td>{o.status}</td></tr>):<tr><td colSpan="8">No orders yet</td></tr>}</tbody></table></section>
-    <section className="panel"><div className="panel-title"><BrainCircuit/> Trade candidates & confidence</div><p className="muted small">Every candidate is retained in the audit ledger with its suggested entry, stop-loss, target, confidence, rationale and review evidence. Dashboard decisions do not place orders.</p><table><thead><tr><th>Candidate</th><th>Side</th><th>Entry</th><th>Stop-loss</th><th>Target</th><th>Confidence</th><th>Status</th><th>Decision</th></tr></thead><tbody>{candidates.length?candidates.map(c=><tr key={c.candidate_id}><td>{c.symbol}<div className="muted small">{c.candidate_id}</div></td><td>{c.side}</td><td>{c.entry}</td><td>{c.stop_loss}</td><td>{c.target}</td><td>{c.confidence}/100</td><td>{c.status}</td><td>{c.status==='PENDING'?<div className="actions"><button onClick={()=>decideCandidate(c.candidate_id,'APPROVED')}>Approve</button><button className="secondary" onClick={()=>decideCandidate(c.candidate_id,'REJECTED')}>Reject</button></div>:'—'}</td></tr>):<tr><td colSpan="8">No candidates received. Candidate generation is not yet automated in this release.</td></tr>}</tbody></table></section>
-    <section className="panel"><div className="panel-title"><Activity/> Immutable audit ledger <button className="secondary" onClick={async()=>{try{const v=await call('/api/audit/verify');setNotice(v.valid?`Audit chain verified: ${v.verified_events} events.`:`Audit chain integrity failure at sequence ${v.failed_seq}.`)}catch(e){setError(e.message)}}}>Verify chain</button></div><p className="muted small">Append-only SQLite event log with SHA-256 hash chaining. API actions, trade candidates, decisions, order events and safety controls are timestamped.</p><table><thead><tr><th>Time (UTC)</th><th>Event</th><th>Entity</th><th>Hash</th></tr></thead><tbody>{audit.length?audit.map(e=><tr key={e.event_id}><td>{e.occurred_at}</td><td>{e.event_type}</td><td>{e.entity_id||'—'}</td><td>{e.event_hash?.slice(0,14)}…</td></tr>):<tr><td colSpan="4">No audit events yet</td></tr>}</tbody></table></section><footer>Development release v2.0 · Paper mode · Live execution disabled · Not production-cleared.</footer>
+
+    {tab==='overview'&&<>
+      <section className="stats">
+        <Metric title="Starting capital" value={'₹'+(account.starting_capital||10000).toLocaleString('en-IN')}/>
+        <Metric title="Daily P&L (incl. open)" value={'₹'+(account.daily_pnl||0).toLocaleString('en-IN')}/>
+        <Metric title="Open positions" value={account.open_positions??0}/>
+        <Metric title="Orders in session" value={account.orders_today??0}/>
+      </section>
+      <section className="panel control-panel">
+        <div className="panel-title"><Bot/> Agent controls & operating mode</div>
+        <div className="control-row">
+          <div><b>Master agent: {isBotOn?'ON':'OFF'}</b><p className="muted">Master start/stop is independent of the emergency kill switch and the semi/full mode selection.</p></div>
+          <div className="mode-control">
+            <label>Operating mode<select value={mode} onChange={e=>changeMode(e.target.value)} disabled={busy||!isBotOn||isKillActive}>
+              <option value="semi">Semi-autonomous · human approves</option><option value="full">Full autonomy · paper permission</option>
+            </select></label>
+            {mode==='full'&&<span className="pill amber">DAILY LOSS LIMIT ₹{status.autonomous_daily_loss_limit??'—'}</span>}
+          </div>
+        </div>
+        <div className="autonomy-form"><label>Daily loss limit (₹)<input type="number" min="1" step="1" value={lossLimit} onChange={e=>setLossLimit(e.target.value)} placeholder="Required for full mode"/></label><button onClick={()=>changeMode('full')} disabled={busy||!isBotOn||isKillActive||!ready||!lossLimit||Number(lossLimit)<=0}>Apply full-autonomy limit</button></div>
+        <div className="readiness"><div className={'ready-dot '+(ready?'on':'')}></div><div><b>Readiness: {status.readiness?.status||'CHECKING'}</b><p className="muted">Full mode requires fresh NSE feed data, source-backed global intelligence, a clear kill switch and a healthy audit ledger.</p></div></div>
+        <div className="checks">{Object.entries(status.readiness?.checks||{}).map(([k,v])=><span className={'check '+(v?'ok':'pending')} key={k}>{v?'✓':'○'} {k.replaceAll('_',' ')}</span>)}</div>
+        <div className="control-row lock-row"><div><b>Daily loss lock: {status.daily_loss_lock?'ACTIVE':'Clear'}</b><p className="muted small">Resetting the daily lock preserves P&amp;L and never re-enables autonomy or releases the kill switch.</p></div><button className="secondary" onClick={resetDailyLock} disabled={!status.daily_loss_lock||busy}>Reset daily loss lock</button></div>
+        <p className="muted small">This release controls operating permission; it does not contain an autonomous signal scanner or production order lifecycle.</p>
+      </section>
+      <section className="grid">
+        <div className="panel"><div className="panel-title"><RadioTower/> NSE market feed <button onClick={connectFeed} disabled={busy}>Connect feed</button></div><p className="muted">Upstox V3 stream. A valid local access token and instrument subscription are required.</p>
+          <table><thead><tr><th>Instrument key</th><th>Last price</th><th>Received (UTC)</th></tr></thead><tbody>{tickRows.length?tickRows.map(x=><tr key={x.symbol}><td>{x.symbol}</td><td>{x.ltp}</td><td>{x.received}</td></tr>):<tr><td colSpan="3">No ticks received yet</td></tr>}</tbody></table>
+        </div>
+        <div className="panel"><div className="panel-title"><ShieldCheck/> Safety & provider</div>
+          <div className="kv"><span>Execution mode</span><b>Paper only</b></div><div className="kv"><span>Live orders</span><b className="red">Disabled</b></div>
+          <div className="kv"><span>AI provider</span><b>{status.ai_provider||'Not configured'}</b></div><div className="kv"><span>Model</span><b>{status.ai_model||'Not configured'}</b></div>
+          <div className="kv"><span>API key</span><b>{status.ai_configured?'Configured':'Missing'}</b></div><div className="kv"><span>Web search</span><b>{status.ai_web_search_enabled?'Requested':'Disabled'}</b></div>
+        </div>
+      </section>
+      <section className="panel research"><div className="panel-title"><Globe/> Global geopolitics & market intelligence <button onClick={refreshIntelligence} disabled={busy}>Refresh intelligence</button></div>
+        <p className="muted">The configured model gathers current global events, commodities, macro data and transmission risks using provider search where supported. The field below is optional and treated as an unverified lead.</p>
+        <textarea value={context} onChange={e=>setContext(e.target.value)} placeholder="Optional additional context, watchlist, or specific question…" rows="3"/>
+        {research?<pre className="research-output">{research}</pre>:<p className="muted">No intelligence brief yet. Refresh to create a source-backed brief.</p>}
+        {intelSources.length>0&&<ul className="source-list">{intelSources.map(s=><li key={s.url}><a href={s.url} target="_blank" rel="noreferrer">{s.title}</a></li>)}</ul>}
+        <div className="muted small">Last refresh: {status.readiness?.intelligence_last_update||'Never'} · Provider: {status.ai_provider||'unconfigured'}</div>
+      </section>
+      <section className="panel analysis-panel">
+        <div className="panel-title"><BrainCircuit/> Multi-asset research</div>
+        <div className="analysis-form">
+          <label>Asset class<select value={analysisClass} onChange={e=>setAnalysisClass(e.target.value)}><option value="both">Equities & commodities</option><option value="equities">Equities</option><option value="commodities">Commodities</option></select></label>
+          <label>Region or venues<input value={analysisRegion} onChange={e=>setAnalysisRegion(e.target.value)} placeholder="Global, US, India, LME…"/></label>
+          <label>Instruments<input value={analysisInstruments} onChange={e=>setAnalysisInstruments(e.target.value)} placeholder="Optional, comma-separated symbols"/></label>
+          <label>Horizon<select value={analysisHorizon} onChange={e=>setAnalysisHorizon(e.target.value)}><option value="intraday">Intraday</option><option value="swing">Swing</option><option value="position">Position</option></select></label>
+        </div>
+        <textarea value={analysisQuestion} onChange={e=>setAnalysisQuestion(e.target.value)} rows="2" placeholder="Research question…"/>
+        <div className="control-row"><span className="muted small">Research is advisory only and never places an order.</span><button onClick={runResearch} disabled={busy||analysisQuestion.trim().length<5}>Run research</button></div>
+        {analysis&&<><pre className="research-output">{analysis.research}</pre><div className="muted small">{analysis.provider} · {analysis.model} · {analysis.web_search_supported?'Search supported':'No search adapter'} · {analysis.generated_at}</div>{analysis.sources?.length>0&&<ul className="source-list">{analysis.sources.map(s=><li key={s.url}><a href={s.url} target="_blank" rel="noreferrer">{s.title}</a></li>)}</ul>}</>}
+      </section>
+    </>}
+
+    {tab==='trades'&&<section className="panel">
+      <div className="panel-title"><Activity/> Trades</div>
+      <p className="muted small">Trade and paper-order records currently held in this runtime session.</p>
+      <div className="filter-bar"><FilterInput label="Symbol" value={tradeFilters.symbol} onChange={v=>setTradeFilters({...tradeFilters,symbol:v})}/><FilterSelect label="Status" value={tradeFilters.status} onChange={v=>setTradeFilters({...tradeFilters,status:v})} options={['OPEN','CLOSED','SUBMITTED_TO_UPSTOX_SANDBOX']}/><FilterSelect label="Side" value={tradeFilters.side} onChange={v=>setTradeFilters({...tradeFilters,side:v})} options={['BUY','SELL']}/><button className="secondary" onClick={refresh}><RefreshCw size={14}/>Refresh</button></div>
+      <table><thead><tr><th>Signal</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Stop</th><th>Target</th><th>Qty</th><th>Status</th><th>Mode</th></tr></thead><tbody>{filteredTrades.length?filteredTrades.map((o,i)=><tr key={o.signal_id||i}><td>{o.signal_id}</td><td>{o.symbol}</td><td>{o.side}</td><td>{o.entry}</td><td>{o.stop_loss}</td><td>{o.target}</td><td>{o.quantity}</td><td>{o.status}</td><td>{o.mode}</td></tr>):<tr><td colSpan="9">No trades match these filters.</td></tr>}</tbody></table>
+    </section>}
+
+    {tab==='suggestions'&&<section className="panel">
+      <div className="panel-title"><BrainCircuit/> Suggested trades <button className="secondary" onClick={()=>window.location.assign(`${API}/api/candidates/export.xlsx`)}><FileSpreadsheet size={14}/>Download daily Excel log</button></div>
+      <p className="muted small">Confidence is a research score, not a measured probability of success. Pending suggestions expire on stale quotes, stop/target invalidation, entry drift, or review TTL. One worksheet per local day is stored in backend/data/suggested_trades.xlsx.</p>
+      <div className="filter-bar"><FilterInput label="Symbol" value={candidateFilters.symbol} onChange={v=>setCandidateFilters({...candidateFilters,symbol:v})}/><FilterSelect label="Status" value={candidateFilters.status} onChange={v=>setCandidateFilters({...candidateFilters,status:v})} options={['PENDING','APPROVED','REJECTED','WATCHLIST','EXPIRED']}/><FilterSelect label="Side" value={candidateFilters.side} onChange={v=>setCandidateFilters({...candidateFilters,side:v})} options={['BUY','SELL']}/><label className="filter-field">Minimum score %<input type="number" min="0" max="100" value={candidateFilters.confidence} onChange={e=>setCandidateFilters({...candidateFilters,confidence:e.target.value})}/></label><button className="secondary" onClick={refresh}><RefreshCw size={14}/>Refresh</button></div>
+      <table><thead><tr><th>Created</th><th>Candidate</th><th>Side</th><th>Entry</th><th>Stop</th><th>Target</th><th>Score</th><th>Status</th><th>Expiry</th><th>Decision</th></tr></thead><tbody>{filteredCandidates.length?filteredCandidates.map(c=><tr key={c.candidate_id}><td>{c.created_at}</td><td>{c.symbol}<div className="muted small">{c.candidate_id}</div></td><td>{c.side}</td><td>{c.entry}</td><td>{c.stop_loss}</td><td>{c.target}</td><td>{c.confidence}%</td><td>{c.status}</td><td>{c.expiry_reason||'—'}</td><td>{c.status==='PENDING'?<div className="actions"><button onClick={()=>decideCandidate(c.candidate_id,'APPROVED')} disabled={busy||mode==='full'}>Approve</button><button className="secondary" onClick={()=>decideCandidate(c.candidate_id,'WATCHLIST')} disabled={busy||mode==='full'}>Watch</button><button className="danger" onClick={()=>decideCandidate(c.candidate_id,'REJECTED')} disabled={busy||mode==='full'}>Reject</button></div>:'—'}</td></tr>):<tr><td colSpan="10">No suggestions match these filters.</td></tr>}</tbody></table>
+      {mode==='full'&&<p className="muted small">Manual suggestion decisions are disabled while full-autonomy permission is selected.</p>}
+    </section>}
+
+    {tab==='audit'&&<section className="panel">
+      <div className="panel-title"><Activity/> Audit ledger <button className="secondary" onClick={verifyAudit}><ShieldCheck size={14}/>Verify chain</button></div>
+      <p className="muted small">Append-only SQLite hash-chain events. Filters below apply to the latest 500 loaded entries.</p>
+      <div className="filter-bar"><FilterInput label="Text or entity" value={auditFilters.q} onChange={v=>setAuditFilters({...auditFilters,q:v})}/><FilterInput label="Event type" value={auditFilters.event_type} onChange={v=>setAuditFilters({...auditFilters,event_type:v})}/><label className="filter-field">From<input type="date" value={auditFilters.date_from} onChange={e=>setAuditFilters({...auditFilters,date_from:e.target.value})}/></label><label className="filter-field">To<input type="date" value={auditFilters.date_to} onChange={e=>setAuditFilters({...auditFilters,date_to:e.target.value})}/></label><button className="secondary" onClick={refresh}><RefreshCw size={14}/>Refresh</button></div>
+      <table><thead><tr><th>Seq</th><th>Time (UTC)</th><th>Event</th><th>Entity</th><th>Details</th><th>Hash</th></tr></thead><tbody>{filteredAudit.length?filteredAudit.map(e=><tr key={e.event_id}><td>{e.seq}</td><td>{e.occurred_at}</td><td>{e.event_type}</td><td>{e.entity_id||'—'}</td><td className="audit-detail">{JSON.stringify(e.payload||{})}</td><td>{e.event_hash?.slice(0,14)}…</td></tr>):<tr><td colSpan="6">No audit events match these filters.</td></tr>}</tbody></table>
+    </section>}
+
+    <footer>Trabot 2.1.0 · Paper mode · Live execution disabled · Development prototype</footer>
   </div>
 }
+
 function Metric({title,value}){return <div className="metric"><span>{title}</span><strong>{value}</strong></div>}
+function FilterInput({label,value,onChange}){return <label className="filter-field">{label}<input value={value} onChange={e=>onChange(e.target.value)} placeholder="All"/></label>}
+function FilterSelect({label,value,onChange,options}){return <label className="filter-field">{label}<select value={value} onChange={e=>onChange(e.target.value)}><option value="">All</option>{options.map(option=><option key={option} value={option}>{option}</option>)}</select></label>}

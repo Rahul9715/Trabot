@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.1.0 — Provider adapters and safer research workflow
+- Added provider adapters for OpenAI, Anthropic, Gemini, NVIDIA NIM, and custom OpenAI-compatible chat-completions endpoints.
+- Added provider/model/key configuration, provider-backed research, and source provenance where the adapter supports search grounding.
+- Added persistent dashboard agent and kill-switch controls, reset endpoint, semi/full paper-permission mode, and filtered Trades, Suggested Trades, and Audit Ledger tabs.
+- Added pending suggestion expiry for TTL, quote staleness/invalidity, stop/target invalidation, and excessive entry drift.
+- Added daily-sheet Excel logging/export for suggested trades.
+- Added `SETUP_GUIDE.md` with Upstox and AI provider setup instructions.
+- Live order submission remains disabled; this release does not promise or establish a trading win rate.
+
 ## 2.0.0 — Development milestone
 - Added SQLite append-only audit ledger with SHA-256 hash chaining and integrity verification endpoint.
 - Added audit records for candidate creation/decisions, AI research, bot controls, paper orders and paper trade closure/modification.

@@ -15,6 +15,7 @@ class RuntimeState:
         self.bot_enabled = False
         self.bot_status = "STOPPED"
         self.autonomous_mode = False
+        self.operating_mode = "SEMI"
         self.autonomous_daily_loss_limit = None
         self.daily_loss_lock = False
         self.daily_loss_baseline = 0.0
@@ -39,5 +40,6 @@ class RuntimeState:
             self.daily_loss_baseline = 0.0
             self.approval = None
             self.kill_switch = True
+            self.operating_mode = "SEMI"
 
 state = RuntimeState()
