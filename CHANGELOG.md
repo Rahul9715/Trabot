@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.0 — Market classification and execution mode clarity
+- Added market region, asset class (equity/commodity/currency), and exchange fields to new signals and trade candidates, with API filters for trades, suggestions, and audit events.
+- Added India/US/Global, category, exchange, status, side, symbol, and date filters to trade and suggestion views; added market/category filters to the audit view.
+- Added a visible paper-versus-live execution control. Paper is selected; live mode is locked and the API rejects requests because live execution is not implemented.
+- Added currency/FX as a selectable AI research scope and widened local CORS for localhost and 127.0.0.1 Vite origins.
+- Migrates existing daily Excel sheets to include the new market classification columns when next updated.
+- These market labels and filters do not add US/global/FX market feeds or live broker connectivity.
+
 ## 2.1.0 — Provider adapters and safer research workflow
 - Added provider adapters for OpenAI, Anthropic, Gemini, NVIDIA NIM, and custom OpenAI-compatible chat-completions endpoints.
 - Added provider/model/key configuration, provider-backed research, and source provenance where the adapter supports search grounding.

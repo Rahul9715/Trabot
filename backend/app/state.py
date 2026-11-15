@@ -16,6 +16,7 @@ class RuntimeState:
         self.bot_status = "STOPPED"
         self.autonomous_mode = False
         self.operating_mode = "SEMI"
+        self.execution_mode = "PAPER"
         self.autonomous_daily_loss_limit = None
         self.daily_loss_lock = False
         self.daily_loss_baseline = 0.0

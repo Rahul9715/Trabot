@@ -32,3 +32,10 @@ Live execution is intentionally gated. Prior to enabling it, broker-specific com
 - Optional user context can be attached to research and is treated as unverified input.
 
 See `SETUP_GUIDE.md` for Upstox and provider setup.
+
+## v2.2.0 market views and execution mode
+
+- Orders and candidates carry `asset_class` (`equity`, `commodity`, `currency`), `market_region` (`India`, `US`, `Global`), and `exchange` metadata. Older records without these fields are displayed as India/equity for backward compatibility.
+- Trade, candidate, and audit APIs accept region and asset-class filters. Dashboard views also filter by exchange, symbol, status, side, confidence (suggestions), and date range.
+- The execution mode endpoint permits PAPER only. LIVE selection returns HTTP 501 and leaves state in PAPER because the live order lifecycle is not implemented.
+- Classification makes records filterable; it does not provide US, commodity, FX or global market data feeds. Upstox market feed remains an NSE-focused scaffold.

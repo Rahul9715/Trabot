@@ -1,4 +1,4 @@
-import secrets
+﻿import secrets
 from datetime import datetime, timezone, date, timedelta
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
@@ -19,9 +19,9 @@ from .ai_provider import generate_research, AIProviderError
 from .excel_log import upsert_candidate, ensure_export
 from .schemas import Candidate, CandidateDecision, TradeUpdate
 
-app = FastAPI(title="AI Trading Desk", version="2.1.0")
+app = FastAPI(title="AI Trading Desk", version="2.2.0")
 init_audit()
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 upstox = UpstoxClient()
 oauth_states = set()
 
@@ -35,6 +35,10 @@ class BotControl(BaseModel):
 class BotModeControl(BaseModel):
     mode: str = Field(pattern="^(semi|full)$")
     max_daily_loss: float | None = Field(default=None, gt=0)
+
+class ExecutionModeControl(BaseModel):
+    mode: str = Field(pattern="^(PAPER|LIVE)$")
+    confirmation: str = ""
 
 class IntelligenceRefresh(BaseModel):
     extra_context: str = Field(default="", max_length=5000)
@@ -98,7 +102,8 @@ async def audit_api_requests(request, call_next):
 def status():
     state.reset_daily_counters_if_needed()
     return {
-        "mode": "paper", "live_orders_enabled": False,
+        "mode": state.execution_mode.lower(), "execution_mode": state.execution_mode,
+        "live_orders_enabled": False,
         "feed_connected": state.connected, "last_feed_at": state.last_feed_at,
         "ai_configured": bool(AI_API_KEY), "ai_provider": AI_PROVIDER,
         "ai_model": AI_MODEL or None, "ai_web_search_enabled": AI_WEB_SEARCH_ENABLED,
@@ -112,6 +117,20 @@ def status():
         "readiness": readiness(), "intelligence_status": state.intelligence_status,
         "last_error": state.last_error
     }
+
+@app.post("/api/execution-mode")
+def set_execution_mode(c: ExecutionModeControl):
+    if c.mode == "LIVE":
+        if c.confirmation != "I AGREEE":
+            raise HTTPException(400, "Type I AGREEE exactly to confirm the LIVE mode selection.")
+        state.execution_mode = "LIVE_SELECTED"
+        record_event("LIVE_MODE_SELECTED", {"confirmation_phrase_received": True, "live_orders_enabled": False})
+        return {"execution_mode": state.execution_mode, "live_orders_enabled": False,
+                "message": "LIVE mode selected and recorded. Real-money order routing is still unavailable in this build."}
+    record_event("EXECUTION_MODE_SELECTED", {"mode": "PAPER"})
+    state.execution_mode = "PAPER"
+    return {"execution_mode": state.execution_mode, "live_orders_enabled": False,
+            "message": "Paper trading selected. Live execution remains unavailable in this release."}
 
 @app.post("/api/bot")
 def bot_control(c: BotControl):
@@ -357,6 +376,8 @@ Requirements:
 
 @app.post("/api/orders/paper")
 def paper_order(s: Signal):
+    if state.execution_mode != "PAPER":
+        raise HTTPException(409, "LIVE mode is selected, but live order routing is not implemented. Switch back to Paper money to submit paper orders.")
     state.reset_daily_counters_if_needed()
     if not state.bot_enabled:
         raise HTTPException(403, "Bot is OFF.")
@@ -395,6 +416,7 @@ def paper_order(s: Signal):
 
 @app.get("/api/orders")
 def orders(status: str | None = None, symbol: str | None = None, side: str | None = None,
+           asset_class: str | None = None, market_region: str | None = None, exchange: str | None = None,
            date_from: date | None = None, date_to: date | None = None):
     rows = state.orders
     if status:
@@ -403,6 +425,12 @@ def orders(status: str | None = None, symbol: str | None = None, side: str | Non
         rows = [item for item in rows if symbol.casefold() in str(item.get("symbol", "")).casefold()]
     if side:
         rows = [item for item in rows if str(item.get("side", "")).casefold() == side.casefold()]
+    if asset_class:
+        rows = [item for item in rows if str(item.get("asset_class", "equity")).casefold() == asset_class.casefold()]
+    if market_region:
+        rows = [item for item in rows if str(item.get("market_region", "India")).casefold() == market_region.casefold()]
+    if exchange:
+        rows = [item for item in rows if exchange.casefold() in str(item.get("exchange", "")).casefold()]
     if date_from:
         rows = [item for item in rows if str(item.get("created_at", ""))[:10] >= date_from.isoformat()]
     if date_to:
@@ -571,6 +599,7 @@ def decide_candidate(candidate_id: str, d: CandidateDecision):
 
 @app.get("/api/candidates")
 def candidates(status: str | None = None, symbol: str | None = None, side: str | None = None,
+               asset_class: str | None = None, market_region: str | None = None, exchange: str | None = None,
                confidence_min: float | None = None, confidence_max: float | None = None,
                date_from: date | None = None, date_to: date | None = None):
     expire_pending_candidates()
@@ -581,6 +610,12 @@ def candidates(status: str | None = None, symbol: str | None = None, side: str |
         rows = [item for item in rows if symbol.casefold() in str(item.get("symbol", "")).casefold()]
     if side:
         rows = [item for item in rows if str(item.get("side", "")).casefold() == side.casefold()]
+    if asset_class:
+        rows = [item for item in rows if str(item.get("asset_class", "equity")).casefold() == asset_class.casefold()]
+    if market_region:
+        rows = [item for item in rows if str(item.get("market_region", "India")).casefold() == market_region.casefold()]
+    if exchange:
+        rows = [item for item in rows if exchange.casefold() in str(item.get("exchange", "")).casefold()]
     if confidence_min is not None:
         rows = [item for item in rows if float(item.get("confidence", 0)) >= confidence_min]
     if confidence_max is not None:
@@ -605,6 +640,7 @@ def export_candidates_xlsx():
 @app.get("/api/audit/events")
 def audit_events(limit: int = 100, before_seq: int | None = None, event_type: str | None = None,
                  entity_id: str | None = None, q: str | None = None,
+                 asset_class: str | None = None, market_region: str | None = None,
                  date_from: date | None = None, date_to: date | None = None):
     if limit < 1 or limit > 500:
         raise HTTPException(400, "limit must be between 1 and 500")
@@ -616,6 +652,22 @@ def audit_events(limit: int = 100, before_seq: int | None = None, event_type: st
     if q:
         term = q.casefold()
         rows = [item for item in rows if term in str(item.get("payload", "")).casefold() or term in str(item.get("event_type", "")).casefold() or term in str(item.get("entity_id", "")).casefold()]
+    if asset_class:
+        def event_asset(item):
+            payload = item.get("payload", {})
+            if not isinstance(payload, dict): return ""
+            nested = payload.get("candidate") or payload.get("signal") or payload.get("order") or {}
+            if not isinstance(nested, dict): nested = {}
+            return payload.get("asset_class") or nested.get("asset_class") or ("equity" if payload.get("symbol") or nested.get("symbol") else "")
+        rows = [item for item in rows if str(event_asset(item)).casefold() == asset_class.casefold()]
+    if market_region:
+        def event_region(item):
+            payload = item.get("payload", {})
+            if not isinstance(payload, dict): return ""
+            nested = payload.get("candidate") or payload.get("signal") or payload.get("order") or {}
+            if not isinstance(nested, dict): nested = {}
+            return payload.get("market_region") or nested.get("market_region") or ("India" if payload.get("symbol") or nested.get("symbol") else "")
+        rows = [item for item in rows if str(event_region(item)).casefold() == market_region.casefold()]
     if date_from:
         rows = [item for item in rows if str(item.get("occurred_at", ""))[:10] >= date_from.isoformat()]
     if date_to:
@@ -651,6 +703,8 @@ async def upstox_callback(code: str, state_value: str = None, state: str = None)
 
 @app.post("/api/orders/upstox-sandbox")
 async def upstox_sandbox_order(s: Signal):
+    if state.execution_mode != "PAPER":
+        raise HTTPException(409, "LIVE mode is selected; sandbox orders are blocked. Switch to Paper money before using the sandbox.")
     if not state.bot_enabled or state.kill_switch:
         raise HTTPException(403,"Bot is OFF or kill switch is active.")
     if UPSTOX_MODE != "sandbox":
@@ -679,3 +733,4 @@ async def live_order(s: Signal, ack: str):
     if not LIVE_TRADING_ENABLED or LIVE_TRADING_ACK != ack or UPSTOX_MODE != "live":
         raise HTTPException(403,"Live execution disabled. Complete broker onboarding, compliance and explicit local activation.")
     raise HTTPException(501,"Live order execution remains deliberately unimplemented in this development build.")
+

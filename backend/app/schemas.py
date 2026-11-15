@@ -1,6 +1,9 @@
 from pydantic import BaseModel, Field
 from typing import Literal
 
+AssetClass = Literal["equity", "commodity", "currency"]
+MarketRegion = Literal["India", "US", "Global"]
+
 class Approval(BaseModel):
     session_id: str = Field(min_length=8, max_length=80)
     symbols: list[str]
@@ -13,6 +16,9 @@ class Signal(BaseModel):
     signal_id: str = Field(min_length=8, max_length=80)
     symbol: str
     instrument_token: str
+    asset_class: AssetClass = "equity"
+    market_region: MarketRegion = "India"
+    exchange: str = Field(default="", max_length=40)
     side: Literal["BUY", "SELL"]
     entry: float = Field(gt=0)
     stop_loss: float = Field(gt=0)
@@ -32,7 +38,7 @@ class ResearchRequest(BaseModel):
         min_length=5,
         max_length=2000,
     )
-    asset_class: Literal["equities", "commodities", "both"] = "both"
+    asset_class: Literal["equities", "commodities", "currencies", "both"] = "both"
     region: str = Field(default="global", min_length=2, max_length=80)
     instruments: list[str] = Field(default_factory=list, max_length=100)
     horizon: Literal["intraday", "swing", "position"] = "swing"
@@ -46,6 +52,9 @@ class Candidate(BaseModel):
     candidate_id: str = Field(min_length=8, max_length=80)
     symbol: str
     instrument_token: str
+    asset_class: AssetClass = "equity"
+    market_region: MarketRegion = "India"
+    exchange: str = Field(default="", max_length=40)
     side: Literal["BUY", "SELL"]
     entry: float = Field(gt=0)
     stop_loss: float = Field(gt=0)

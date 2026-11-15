@@ -1,6 +1,6 @@
-﻿# NSE AI Trading Desk — Development Release 2.1.0
+﻿# NSE AI Trading Desk — Development Release 2.2.0
 
-> **Status: development prototype only.** This repository is the v2.1.0 development release, not a production release. Live order placement is disabled/unimplemented; `/api/orders/live` deliberately returns HTTP 501.
+> **Status: development prototype only.** This repository is the v2.2.0 development release, not a production release. Live order placement is disabled/unimplemented; `/api/orders/live` deliberately returns HTTP 501.
 
 ## Repository conventions
 
@@ -26,7 +26,7 @@ The backend supports adapters for OpenAI, Anthropic Claude, Google Gemini, NVIDI
 
 ## Source baseline
 
-The v2.1.0 development release includes provider adapters, candidate expiry, daily-sheet Excel export, dedicated filtered dashboard tabs, persistent agent/kill controls, semi/full paper-permission selection, and a light/dark theme.
+The v2.2.0 development release includes provider adapters, market/asset classification, region/category filters, a visible paper/live selector with live locked, candidate expiry, daily-sheet Excel export, dedicated dashboard tabs, and persistent agent/kill controls.
 
 ## Local setup
 
@@ -67,5 +67,6 @@ See `SETUP_GUIDE.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `REVIEW_REPORT.md`, `CO
 Durable event-sourced recovery, autonomous NSE scan and strategy scheduling, statistically calibrated confidence, portfolio allocation, genuinely independent review, complete broker order/fill lifecycle, asynchronous evidence archival, UI end-to-end testing, authentication/security hardening, and compliance review remain outstanding.
 
 A passing health/readiness check is not proof of production readiness and is not a trade signal.
+
 
 

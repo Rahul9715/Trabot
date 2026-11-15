@@ -19,7 +19,7 @@ from openpyxl.utils import get_column_letter
 
 WORKBOOK_PATH = Path(os.getenv("CANDIDATE_XLSX_PATH", "./data/suggested_trades.xlsx"))
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
-HEADERS = ["Candidate ID", "Created (UTC)", "Symbol", "Instrument", "Side", "Entry", "Stop Loss", "Target", "Confidence %", "Status", "Expiry Reason", "Rationale", "Target Rationale", "Stop Rationale", "Evidence JSON", "Updated (UTC)"]
+HEADERS = ["Candidate ID", "Created (UTC)", "Market", "Asset Class", "Exchange", "Symbol", "Instrument", "Side", "Entry", "Stop Loss", "Target", "Confidence %", "Status", "Expiry Reason", "Rationale", "Target Rationale", "Stop Rationale", "Evidence JSON", "Updated (UTC)"]
 _LOCK = threading.RLock()
 
 
@@ -40,7 +40,8 @@ def _sheet_name(item: dict) -> str:
 def _values(item: dict) -> list:
     return [
         _safe_text(item.get("candidate_id")), _safe_text(item.get("created_at")),
-        _safe_text(item.get("symbol")), _safe_text(item.get("instrument_token")),
+        _safe_text(item.get("market_region", "India")), _safe_text(item.get("asset_class", "equity")),
+        _safe_text(item.get("exchange")), _safe_text(item.get("symbol")), _safe_text(item.get("instrument_token")),
         _safe_text(item.get("side")), item.get("entry"), item.get("stop_loss"), item.get("target"),
         item.get("confidence"), _safe_text(item.get("status")), _safe_text(item.get("expiry_reason")),
         _safe_text(item.get("rationale")), _safe_text(item.get("target_rationale")),
@@ -61,11 +62,21 @@ def upsert_candidate(item: dict) -> Path:
             workbook.remove(workbook.active)
         name = _sheet_name(item)
         sheet = workbook[name] if name in workbook.sheetnames else workbook.create_sheet(name)
-        if sheet.max_row == 1 and sheet.cell(1, 1).value is None:
+        old_headers = [sheet.cell(1, col).value for col in range(1, sheet.max_column + 1)] if sheet.max_row else []
+        if old_headers and old_headers != HEADERS and any(old_headers):
+            old_records = [dict(zip(old_headers, values)) for values in sheet.iter_rows(min_row=2, values_only=True)]
+            sheet.delete_rows(1, sheet.max_row)
             for col, header in enumerate(HEADERS, 1):
                 sheet.cell(1, col, header)
-        elif sheet.max_row == 0:
-            sheet.append(HEADERS)
+            for old in old_records:
+                migrated = dict(old)
+                migrated.setdefault("Market", "India")
+                migrated.setdefault("Asset Class", "equity")
+                migrated.setdefault("Exchange", "")
+                sheet.append([migrated.get(header) for header in HEADERS])
+        elif not old_headers or not any(old_headers):
+            for col, header in enumerate(HEADERS, 1):
+                sheet.cell(1, col, header)
         for cell in sheet[1]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill("solid", fgColor="1F4E78")
@@ -80,7 +91,7 @@ def upsert_candidate(item: dict) -> Path:
                 sheet.cell(row, col, value)
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
-        widths = [24, 28, 18, 28, 10, 14, 14, 14, 15, 16, 36, 60, 40, 40, 80, 28]
+        widths = [24, 28, 14, 16, 16, 18, 28, 10, 14, 14, 14, 15, 16, 36, 60, 40, 40, 80, 28]
         for col, width in enumerate(widths, 1):
             sheet.column_dimensions[get_column_letter(col)].width = width
         handle, temp_name = tempfile.mkstemp(prefix="suggested_trades_", suffix=".xlsx", dir=WORKBOOK_PATH.parent)

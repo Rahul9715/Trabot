@@ -46,3 +46,11 @@ These three passes were performed by the same assistant in separate functional, 
 - Full mode remains paper-mode permission only; there is no production scanner, calibrated win-rate evidence, durable trade-state recovery or global broker feed. Live order submission is still disabled.
 - Setup is documented in `SETUP_GUIDE.md`. Tests, package installation, and frontend build were not run for this release.
 - The existing `frontend/package-lock.json` was untracked before this work and was left untouched and unstaged.
+
+## Release 2.2.0 scope review
+
+- Added market-region, asset-class, exchange, and date filters across the trades and candidate APIs/dashboard, plus market/category filtering in audit views.
+- Added explicit visible execution mode selection. Paper mode remains active; live mode is rejected by the backend with HTTP 501.
+- Added currency/FX research scope and CORS support for both local Vite hostnames.
+- Classification is metadata only. US equities, commodities, FX and other global feeds, broker integrations, live order lifecycle, durable trade recovery, and production authentication remain unimplemented.
+- No automated tests or frontend build were run for these changes.
