@@ -4,6 +4,8 @@ React dashboard -> FastAPI -> market data / AI research / strategy approval / de
 
 FastAPI lifespan starts the asynchronous periodic intelligence worker and conditionally connects the configured Upstox V3 feed. The worker offloads provider/search I/O from the event loop; request handlers remain available during refresh. Browser buttons use per-action pending state so kill-switch requests remain independent. The SearXNG container and Vite frontend are separate services and must be running separately.
 
+FastAPI lifespan also starts a paper-only strategy worker. It aggregates actual configured NSE cash-equity LTP updates into completed one-minute bars, evaluates EMA crossover, Donchian breakout, and RSI re-entry rules, creates suggestions in semi mode, and submits risk-bounded local paper orders in full mode. It simulates stop/target/time/session exits on feed updates. It skips index-only instruments and reports that condition in status. Paper strategy state and market history are currently in memory and reset on restart; no fees, taxes, slippage, holiday calendar, or broker fill behavior are simulated.
+
 Upstox integration:
 - OAuth 2.0 login URL and callback exchange
 - Upstox Python SDK MarketDataStreamerV3 for V3 protobuf WebSocket stream
@@ -15,7 +17,7 @@ AI:
 - Explicit instruction to separate facts, assumptions, uncertainty and missing data.
 - Research search can be selected independently from the model provider: native provider search, local SearXNG JSON search, or disabled. SearXNG titles, snippets, URLs, publication dates and engine names are passed to the selected model and retained in the returned source list and audit event.
 
-Live execution is intentionally gated. Prior to enabling it, broker-specific compliance onboarding and a production-grade order state machine are required.
+Live execution remains intentionally unimplemented and gated. Prior to enabling it, broker-specific compliance onboarding, a production-grade order state machine with restart recovery and fill reconciliation, live end-to-end validation, and a separate safety review are required.
 
 ## v2.0 audit and safety additions
 

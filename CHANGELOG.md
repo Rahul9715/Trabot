@@ -1,11 +1,16 @@
 # Changelog
 
+## Unreleased — Experimental autonomous paper strategy engine
+- Add a feed-driven paper scanner with 1-minute EMA crossover, Donchian breakout, and RSI re-entry rules, plus paper-only entry sizing and observed-tick exits.
+- Add NSE-equity instrument eligibility checks, warm-up/status reporting, stale-feed handling, bounded bar deduplication, and regression coverage for kill-switch and autonomy/order races.
+- This is an unvalidated rules prototype. It does not enable live order routing or claim profitability; fees, slippage, durable recovery, and out-of-sample validation remain incomplete.
+
 ## Unreleased — Reports, themes and startup safety
 - Start with the emergency kill switch released (OFF), while leaving the master bot stopped; daily rollover keeps the switch released.
 - Add separate Global Intelligence and Reports tabs, with closed-trade daily P&L charts, win/loss breakdowns and period, date, market, asset and symbol filters.
 - Add a grayscale dark theme and an optional high-contrast dark theme.
 - Change the explicit LIVE mode acknowledgement phrase to `I AGREE`; make clear that it records a mode selection only. Live order routing stays OFF and locked.
-- No autonomous scanner, durable report history, or validated/profitable strategy is added.
+- No durable report history or validated/profitable strategy is added.
 
 ## 2.4.0 - Responsive controls and startup-managed services
 - Replaced the page-wide pending flag with independent action states so research does not disable navigation, routine controls, or the emergency kill switch.

@@ -1,3 +1,10 @@
+# Experimental paper strategy engine review (unreleased)
+
+- Added a deterministic price-rule engine and feed-driven paper worker. Unit tests cover strategy signals, candidate submission, risk rejection, manual approval, index-only gating, stale exits, kill/order races, autonomy revocation, kill/start race, and bounded bar deduplication.
+- Validation: backend `compileall` succeeded; `pytest -q tests` passed 32 tests; frontend `npm run build` succeeded; `git diff --check` passed. Vite emitted the existing large-chunk and `use client` directive warnings.
+- Independent AI peer review found and prompted fixes for the bot-start/kill race and unbounded seen-bar cache; its final read found no blocking issues in those fixes.
+- Scope remains an experimental paper-only rules engine. The strategy is not validated out of sample, costs/slippage/holiday calendar are not modeled, worker/order lifecycle lacks end-to-end feed and broker testing, and live routing remains unimplemented. A code review is not broker, compliance, investment or human release approval.
+
 # v2.0 Review Report
 
 ## Unreleased dashboard and startup controls

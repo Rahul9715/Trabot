@@ -30,6 +30,11 @@ class RuntimeState:
         self.intelligence_worker_status = "STOPPED"
         self.intelligence_worker_last_run = None
         self.intelligence_worker_error = None
+        self.strategy_worker_status = "STOPPED"
+        self.strategy_worker_last_scan = None
+        self.strategy_worker_error = None
+        self.strategy_last_signal = None
+        self.strategy_last_action = "Waiting for configured NSE equity instruments."
         self.last_error = None
 
     def tick(self, symbol: str, data: dict):
@@ -46,7 +51,8 @@ class RuntimeState:
             self.daily_loss_lock = False
             self.daily_loss_baseline = 0.0
             self.approval = None
-            self.kill_switch = False
+            # The emergency switch is independent of day counters. A daily
+            # rollover must never release an engaged kill switch.
             self.operating_mode = "SEMI"
 
 state = RuntimeState()

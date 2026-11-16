@@ -1,8 +1,11 @@
 import asyncio
 import secrets
 import threading
+import math
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, date, timedelta
+from zoneinfo import ZoneInfo
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,14 +22,265 @@ from .config import (STARTING_CAPITAL, AI_API_KEY, AI_MODEL, AI_PROVIDER, AI_WEB
                      LIVE_TRADING_ENABLED, LIVE_TRADING_ACK, UPSTOX_MODE,
                      INTELLIGENCE_MAX_AGE_MINUTES, CANDIDATE_PENDING_TTL_MINUTES,
                      CANDIDATE_QUOTE_MAX_AGE_SECONDS, CANDIDATE_ENTRY_TOLERANCE_PERCENT,
-                     KILL_SWITCH_RESET_ALLOWED)
+                     KILL_SWITCH_RESET_ALLOWED, MAX_RISK_PER_TRADE, MAX_TRADES_PER_DAY,
+                     MAX_OPEN_POSITIONS, PAPER_DEFAULT_DAILY_LOSS_LIMIT, PAPER_MAX_HOLD_MINUTES,
+                     PAPER_ENTRY_CUTOFF_HOUR, PAPER_ENTRY_CUTOFF_MINUTE,
+                     PAPER_FORCE_EXIT_HOUR, PAPER_FORCE_EXIT_MINUTE)
 from .audit import init_audit, record_event, list_events, verify_chain, audit_health
 from .ai_provider import generate_research, AIProviderError
 from .search_provider import search_searxng, format_search_evidence, SearchProviderError
 from .excel_log import upsert_candidate, ensure_export
 from .schemas import Candidate, CandidateDecision, TradeUpdate
+from .paper_strategies import MinuteBarBook, evaluate_strategies
 
 _intelligence_refresh_lock = threading.Lock()
+_order_gate = threading.Lock()
+_paper_bar_book = MinuteBarBook()
+_paper_processed_ticks: dict[str, str] = {}
+_paper_seen_bars: set[tuple[str, str]] = set()
+_paper_seen_bar_order: deque[tuple[str, str]] = deque()
+_PAPER_SEEN_BAR_LIMIT = 20_000
+
+
+def _mark_paper_bar_seen(bar_key: tuple[str, str]) -> bool:
+    """Deduplicate strategy bars while bounding memory over long-running sessions."""
+    if bar_key in _paper_seen_bars:
+        return False
+    if len(_paper_seen_bar_order) >= _PAPER_SEEN_BAR_LIMIT:
+        _paper_seen_bars.discard(_paper_seen_bar_order.popleft())
+    _paper_seen_bars.add(bar_key)
+    _paper_seen_bar_order.append(bar_key)
+    return True
+
+
+def _eligible_paper_instruments() -> list[str]:
+    """Only explicitly subscribed NSE cash-equity instruments are tradable."""
+    return [key for key in UPSTOX_INSTRUMENT_KEYS if key.startswith("NSE_EQ|")]
+
+
+def _paper_symbol(instrument_key: str) -> str:
+    return instrument_key.split("|", 1)[-1]
+
+
+def _paper_approval(symbols: list[str], max_daily_loss: float | None = None) -> dict:
+    expires = datetime.now(timezone.utc) + timedelta(hours=24)
+    return {
+        "symbols": symbols,
+        "max_risk_per_trade": max(1.0, min(float(MAX_RISK_PER_TRADE), 50.0)),
+        "max_daily_loss": float(max_daily_loss or PAPER_DEFAULT_DAILY_LOSS_LIMIT),
+        "max_trades": max(1, min(int(MAX_TRADES_PER_DAY), 2)),
+        "expires_at": expires.isoformat(),
+    }
+
+
+def _stale_open_positions(now: datetime | None = None) -> list[str]:
+    now = now or datetime.now(timezone.utc)
+    stale = []
+    for order in state.orders:
+        if order.get("status") != "OPEN":
+            continue
+        tick = state.ticks.get(order.get("instrument_token"))
+        received = _aware_utc(tick.get("received_at") if tick else None)
+        age = (now - received).total_seconds() if received else float("inf")
+        if age < 0 or age > 3:
+            stale.append(str(order.get("symbol", order.get("instrument_token", "unknown"))))
+    return stale
+
+
+def _in_indian_cash_session(now: datetime, *, for_entry: bool = False) -> bool:
+    local = now.astimezone(ZoneInfo("Asia/Kolkata"))
+    if local.weekday() >= 5:
+        return False
+    minute = local.hour * 60 + local.minute
+    start = 9 * 60 + 15
+    cutoff = PAPER_ENTRY_CUTOFF_HOUR * 60 + PAPER_ENTRY_CUTOFF_MINUTE if for_entry else PAPER_FORCE_EXIT_HOUR * 60 + PAPER_FORCE_EXIT_MINUTE
+    return start <= minute < cutoff
+
+
+def _close_paper_position(order: dict, price: float, reason: str) -> None:
+    direction = 1 if order["side"] == "BUY" else -1
+    gross = round((float(price) - float(order.get("actual_entry", order["entry"]))) * int(order["quantity"]) * direction, 2)
+    stamp = datetime.now(timezone.utc).isoformat()
+    changes = {"actual_exit": float(price), "gross_pnl": gross, "charges": 0.0,
+               "net_pnl": gross, "realised_pnl": gross, "status": "CLOSED",
+               "exit_reason": reason, "closed_at": stamp,
+               "paper_costs_note": "Broker fees, taxes and slippage are not modeled."}
+    record_event("PAPER_TRADE_CLOSED", {"before": order.copy(), "changes": changes}, entity_id=order["signal_id"])
+    order.update(changes)
+    state.daily_realised_pnl += gross
+
+
+def _manage_paper_exits(instrument_key: str, tick: dict, now: datetime) -> None:
+    price = float(tick["ltp"])
+    for order in list(state.orders):
+        if order.get("status") != "OPEN" or order.get("instrument_token") != instrument_key:
+            continue
+        side = order["side"]
+        stop = float(order.get("actual_stop_loss", order["stop_loss"]))
+        target = float(order.get("actual_target", order["target"]))
+        opened = _aware_utc(order.get("created_at"))
+        if side == "BUY" and price <= stop:
+            _close_paper_position(order, price, "Automatic stop-loss; exit priced at observed feed tick")
+        elif side == "SELL" and price >= stop:
+            _close_paper_position(order, price, "Automatic stop-loss; exit priced at observed feed tick")
+        elif side == "BUY" and price >= target:
+            _close_paper_position(order, price, "Automatic target; exit priced at observed feed tick")
+        elif side == "SELL" and price <= target:
+            _close_paper_position(order, price, "Automatic target; exit priced at observed feed tick")
+        elif opened and (now - opened).total_seconds() >= PAPER_MAX_HOLD_MINUTES * 60:
+            _close_paper_position(order, price, "Maximum paper holding time reached")
+        elif not _in_indian_cash_session(now):
+            _close_paper_position(order, price, "Paper position closed at configured session cutoff")
+
+
+def _record_strategy_candidate(instrument_key: str, setup, tick: dict) -> dict:
+    """Persist one real-feed strategy setup, then submit only in FULL paper mode."""
+    symbol = _paper_symbol(instrument_key)
+    candidate_id = f"paper-{secrets.token_hex(12)}"
+    candidate = {
+        "candidate_id": candidate_id, "symbol": symbol, "instrument_token": instrument_key,
+        "asset_class": "equity", "market_region": "India", "exchange": "NSE",
+        "side": setup.side, "entry": setup.entry, "stop_loss": setup.stop_loss,
+        "target": setup.target, "confidence": setup.score,
+        "rationale": setup.rationale + " Rule score is not a win probability.",
+        "target_rationale": "Fixed 2R target from the observed 1m ATR.",
+        "stop_loss_rationale": "1.5 times observed 1m ATR; stop gap may be exceeded by the next tick.",
+        "evidence": {"strategy": setup.strategy, "strategy_version": "paper-rules-v1",
+                     "bar_time": setup.bar_time, "quote_time": tick.get("received_at"),
+                     "quote": float(tick["ltp"]), "data_source": "Upstox V3 live feed",
+                     "interval": "1m bars aggregated from live LTP updates",
+                     "limitations": ["No volume signal", "No fees, taxes or slippage modeled",
+                                     "No exchange holiday calendar", "Paper simulation only"]},
+        "strategy_version": "paper-rules-v1", "review_1": {}, "review_2": {},
+        "status": "PENDING", "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    record_event("TRADE_CANDIDATE_CREATED", candidate, entity_id=candidate_id)
+    state.candidates[candidate_id] = candidate
+    try:
+        upsert_candidate(candidate)
+    except Exception as exc:
+        record_event("TRADE_CANDIDATE_XLSX_WRITE_FAILED", {"reason": str(exc)}, entity_id=candidate_id)
+
+    if state.operating_mode != "FULL" or not state.autonomous_mode:
+        state.strategy_last_action = f"Suggestion created: {setup.strategy} {setup.side} {symbol}. Human approval required."
+        return candidate
+
+    risk_per_share = abs(setup.entry - setup.stop_loss)
+    daily_limit = float(state.autonomous_daily_loss_limit or PAPER_DEFAULT_DAILY_LOSS_LIMIT)
+    risk_budget = min(float(MAX_RISK_PER_TRADE), daily_limit / max(1, min(MAX_TRADES_PER_DAY, 2)), STARTING_CAPITAL * 0.005)
+    quantity = math.floor(risk_budget / risk_per_share) if risk_per_share > 0 else 0
+    if quantity < 1:
+        candidate.update({"status": "AUTO_REJECTED", "decision_reason": "Stop distance exceeds the configured per-trade paper risk budget."})
+        record_event("AUTO_PAPER_ENTRY_REJECTED", {"candidate": candidate, "reason": candidate["decision_reason"]}, entity_id=candidate_id)
+        state.strategy_last_action = candidate["decision_reason"]
+        return candidate
+
+    signal = Signal(signal_id=candidate_id, symbol=symbol, instrument_token=instrument_key,
+                    asset_class="equity", market_region="India", exchange="NSE", side=setup.side,
+                    entry=setup.entry, stop_loss=setup.stop_loss, target=setup.target,
+                    quantity=quantity, product="I", rationale=setup.rationale,
+                    confidence=setup.score, evidence=candidate["evidence"])
+    try:
+        _submit_paper_order(signal, autonomous_required=True)
+        candidate.update({"status": "AUTO_EXECUTED", "order_id": candidate_id,
+                          "decision_reason": "Automatically submitted to the local paper simulator."})
+        state.strategy_last_action = f"Paper position opened: {setup.side} {symbol}, quantity {quantity}."
+    except Exception as exc:
+        detail = getattr(exc, "detail", str(exc))
+        candidate.update({"status": "AUTO_REJECTED", "decision_reason": str(detail)})
+        record_event("AUTO_PAPER_ENTRY_REJECTED", {"candidate_id": candidate_id, "reason": str(detail)}, entity_id=candidate_id)
+        state.strategy_last_action = f"Setup blocked by risk checks: {detail}"
+    try:
+        upsert_candidate(candidate)
+    except Exception as exc:
+        record_event("TRADE_CANDIDATE_XLSX_WRITE_FAILED", {"reason": str(exc)}, entity_id=candidate_id)
+    return candidate
+
+
+async def _paper_strategy_worker():
+    """Aggregate feed ticks, publish suggestions, and manage paper positions."""
+    state.strategy_worker_status = "RUNNING"
+    while True:
+        try:
+            state.strategy_worker_error = None
+            state.reset_daily_counters_if_needed()
+            if state.autonomous_mode and state.autonomous_daily_loss_limit is not None:
+                pnl = current_daily_pnl(state)
+                if pnl - state.daily_loss_baseline <= -state.autonomous_daily_loss_limit:
+                    state.autonomous_mode = False
+                    state.operating_mode = "SEMI"
+                    state.daily_loss_lock = True
+                    record_event("DAILY_LOSS_LOCK_TRIGGERED", {
+                        "daily_pnl": pnl, "baseline": state.daily_loss_baseline,
+                        "limit": state.autonomous_daily_loss_limit,
+                        "source": "paper_strategy_worker",
+                    })
+                    state.strategy_last_action = "Daily paper loss limit reached; autonomous entries locked."
+            eligible = _eligible_paper_instruments()
+            state.strategy_worker_status = "RUNNING" if eligible else "NO_ELIGIBLE_INSTRUMENTS"
+            if not eligible:
+                state.strategy_last_action = "Configure NSE_EQ instrument keys; current default subscriptions are index-only."
+            for instrument_key in eligible:
+                tick = state.ticks.get(instrument_key)
+                if not tick:
+                    continue
+                received = str(tick.get("received_at") or "")
+                if not received or _paper_processed_ticks.get(instrument_key) == received:
+                    continue
+                _paper_processed_ticks[instrument_key] = received
+                now = _aware_utc(received)
+                if now is None:
+                    continue
+                quote_age = (datetime.now(timezone.utc) - now).total_seconds()
+                if quote_age < 0 or quote_age > 3:
+                    state.strategy_last_action = "Ignoring a stale or future-dated quote; paper decisions require a fresh tick."
+                    continue
+                await asyncio.to_thread(_manage_paper_exits, instrument_key, tick, now)
+                closed_bar = _paper_bar_book.add_tick(instrument_key, float(tick["ltp"]), now)
+                if closed_bar is None:
+                    continue
+                state.strategy_worker_last_scan = datetime.now(timezone.utc).isoformat()
+                if not state.bot_enabled or state.kill_switch:
+                    state.strategy_last_action = "Bars collected; start the agent to scan for suggestions."
+                    continue
+                if state.execution_mode != "PAPER":
+                    state.strategy_last_action = "Live routing is locked; select Paper money to scan and simulate orders."
+                    continue
+                if not _in_indian_cash_session(now, for_entry=True):
+                    state.strategy_last_action = "No new entries outside the configured NSE intraday entry window."
+                    continue
+                if not state.connected or not readiness()["ready"]:
+                    state.strategy_last_action = "Scanning paused until feed, source-backed intelligence, and audit checks are ready."
+                    continue
+                bar_key = (instrument_key, closed_bar.started_at.isoformat())
+                if not _mark_paper_bar_seen(bar_key):
+                    continue
+                setups = evaluate_strategies(_paper_bar_book.bars(instrument_key))
+                if not setups:
+                    count = len(_paper_bar_book.bars(instrument_key))
+                    state.strategy_last_action = f"No rule triggered ({count}/30 completed 1m bars available)."
+                    continue
+                setup = sorted(setups, key=lambda item: item.score, reverse=True)[0]
+                # Re-anchor the setup to the current observed quote while keeping
+                # its ATR-derived stop and target distances unchanged.
+                offset = float(tick["ltp"]) - setup.entry
+                setup = setup.__class__(setup.strategy, setup.side, float(tick["ltp"]),
+                                        setup.stop_loss + offset, setup.target + offset,
+                                        setup.rationale, setup.score, setup.bar_time)
+                await asyncio.to_thread(_record_strategy_candidate, instrument_key, setup, tick)
+            stale_positions = _stale_open_positions()
+            if stale_positions:
+                state.strategy_last_action = (
+                    "Exit monitoring paused for stale feed on " + ", ".join(stale_positions) +
+                    "; positions remain open until a fresh observed quote is available."
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            state.strategy_worker_error = str(exc)
+            state.strategy_worker_status = "ERROR"
+            state.last_error = str(exc)
+        await asyncio.sleep(0.5)
 
 
 async def _intelligence_worker():
@@ -53,6 +307,7 @@ async def lifespan(_app):
     """Start internal research and any configured market feed with FastAPI."""
     init_audit()
     research_task = asyncio.create_task(_intelligence_worker(), name="global-intelligence-worker")
+    strategy_task = asyncio.create_task(_paper_strategy_worker(), name="paper-strategy-worker")
     if UPSTOX_ACCESS_TOKEN and UPSTOX_INSTRUMENT_KEYS:
         try:
             await asyncio.to_thread(feed.start, UPSTOX_INSTRUMENT_KEYS)
@@ -66,9 +321,11 @@ async def lifespan(_app):
         yield
     finally:
         research_task.cancel()
-        await asyncio.gather(research_task, return_exceptions=True)
+        strategy_task.cancel()
+        await asyncio.gather(research_task, strategy_task, return_exceptions=True)
         feed.stop()
         state.intelligence_worker_status = "STOPPED"
+        state.strategy_worker_status = "STOPPED"
 
 
 app = FastAPI(title="AI Trading Desk", version="2.4.0", lifespan=lifespan)
@@ -205,6 +462,17 @@ def status():
         "autonomous_daily_loss_limit": state.autonomous_daily_loss_limit,
         "daily_loss_lock": state.daily_loss_lock,
         "daily_pnl": round(current_daily_pnl(state), 2),
+        "paper_strategy_engine": {
+            "status": state.strategy_worker_status,
+            "last_scan": state.strategy_worker_last_scan,
+            "error": state.strategy_worker_error,
+            "last_action": state.strategy_last_action,
+            "eligible_equity_instruments": len(_eligible_paper_instruments()),
+            "minimum_warmup_bars": 30,
+            "strategies": ["ema_8_21_crossover", "donchian_20_breakout", "rsi_14_reentry"],
+            "mode": "paper_only",
+            "stale_open_positions": _stale_open_positions(),
+        },
         "readiness": readiness(), "intelligence_status": state.intelligence_status,
         "last_error": state.last_error
     }
@@ -214,12 +482,14 @@ def set_execution_mode(c: ExecutionModeControl):
     if c.mode == "LIVE":
         if c.confirmation != "I AGREE":
             raise HTTPException(400, "Type I AGREE exactly to confirm the LIVE mode selection.")
-        state.execution_mode = "LIVE_SELECTED"
+        with _order_gate:
+            state.execution_mode = "LIVE_SELECTED"
         record_event("LIVE_MODE_SELECTED", {"confirmation_phrase_received": True, "live_orders_enabled": False})
         return {"execution_mode": state.execution_mode, "live_orders_enabled": False,
                 "message": "LIVE mode selected and recorded. Real-money order routing is still unavailable in this build."}
     record_event("EXECUTION_MODE_SELECTED", {"mode": "PAPER"})
-    state.execution_mode = "PAPER"
+    with _order_gate:
+        state.execution_mode = "PAPER"
     return {"execution_mode": state.execution_mode, "live_orders_enabled": False,
             "message": "Paper trading selected. Live execution remains unavailable in this release."}
 
@@ -227,18 +497,25 @@ def set_execution_mode(c: ExecutionModeControl):
 def bot_control(c: BotControl):
     state.reset_daily_counters_if_needed()
     if not c.enabled:
-        state.bot_enabled = False
+        with _order_gate:
+            state.bot_enabled = False
+            state.autonomous_mode = False
+            state.operating_mode = "SEMI"
+            state.approval = None
         record_event("BOT_STOPPED", {"autonomy_revoked": True})
         state.bot_status = "STOPPED"
-        state.autonomous_mode = False
-        state.operating_mode = "SEMI"
         return {"bot_enabled": False, "status": "STOPPED", "autonomous_mode": False}
-    if state.kill_switch:
-        raise HTTPException(409, "Reset the emergency kill switch before starting the agent.")
+    record_event("BOT_START_REQUESTED", {"mode": "paper"})
+    with _order_gate:
+        if state.kill_switch:
+            raise HTTPException(409, "Reset the emergency kill switch before starting the agent.")
+        state.bot_enabled = True
+        state.bot_status = "STARTING"
+        state.operating_mode = "SEMI"
+        state.autonomous_mode = False
+        state.autonomous_daily_loss_limit = None
+        state.approval = None
     record_event("BOT_STARTED", {"mode": "paper"})
-    state.bot_enabled = True
-    state.bot_status = "STARTING"
-    state.operating_mode = "SEMI"
     return {"bot_enabled": True, "status": "STARTING",
             "message": "Bot started. It will show READY only after fresh market feed and global intelligence checks pass."}
 
@@ -251,23 +528,31 @@ def set_bot_mode(c: BotModeControl):
         raise HTTPException(409, "Emergency kill switch is active.")
     if c.mode == "semi":
         record_event("BOT_MODE_CHANGED", {"mode": "SEMI", "autonomy_revoked": True})
-        state.operating_mode = "SEMI"
-        state.autonomous_mode = False
-        state.autonomous_daily_loss_limit = None
+        with _order_gate:
+            state.operating_mode = "SEMI"
+            state.autonomous_mode = False
+            state.autonomous_daily_loss_limit = None
+            state.approval = None
         return {"mode": "SEMI", "autonomous_mode": False,
                 "message": "Semi-autonomous mode: suggestions require a human decision."}
     if c.max_daily_loss is None:
         raise HTTPException(400, "Set a positive daily loss limit before enabling full autonomy.")
+    if not _eligible_paper_instruments():
+        raise HTTPException(409, "Full autonomy needs at least one NSE cash-equity key (NSE_EQ|...) in UPSTOX_INSTRUMENT_KEYS. Index keys are not stock order instruments.")
     if state.daily_loss_lock:
         raise HTTPException(409, "Daily loss lock is active. Reset it explicitly before enabling full autonomy.")
     if not readiness()["ready"]:
         raise HTTPException(409, "Agent is not READY. Fresh market data, source-backed intelligence, and audit availability are required.")
     baseline = current_daily_pnl(state)
     record_event("BOT_MODE_CHANGED", {"mode": "FULL", "daily_loss_limit": float(c.max_daily_loss), "baseline_pnl": baseline})
-    state.operating_mode = "FULL"
-    state.autonomous_daily_loss_limit = float(c.max_daily_loss)
-    state.daily_loss_baseline = baseline
-    state.autonomous_mode = True
+    with _order_gate:
+        if state.kill_switch or not state.bot_enabled:
+            raise HTTPException(409, "Agent stopped or kill switch engaged while enabling autonomy.")
+        state.operating_mode = "FULL"
+        state.autonomous_daily_loss_limit = float(c.max_daily_loss)
+        state.daily_loss_baseline = baseline
+        state.autonomous_mode = True
+        state.approval = _paper_approval([_paper_symbol(key) for key in _eligible_paper_instruments()], float(c.max_daily_loss))
     return {"mode": "FULL", "autonomous_mode": True,
             "message": "Full-autonomy permission is enabled within the configured paper-trading loss limit."}
 
@@ -281,30 +566,42 @@ def autonomy(c: AutonomyConfig):
             raise HTTPException(409, "Reset the emergency kill switch explicitly before enabling autonomy.")
         if c.max_daily_loss is None:
             raise HTTPException(400, "Enter a maximum daily loss limit before enabling autonomous mode.")
+        if not _eligible_paper_instruments():
+            raise HTTPException(409, "Autonomy needs at least one NSE cash-equity key (NSE_EQ|...) in UPSTOX_INSTRUMENT_KEYS. Index keys are not stock order instruments.")
         if state.daily_loss_lock:
             raise HTTPException(409, "Daily loss lock is active. Reset it explicitly before enabling autonomy.")
         if not readiness()["ready"]:
             raise HTTPException(409, "Bot is not READY. Update global intelligence and establish a fresh market feed first.")
         new_baseline = current_daily_pnl(state)
         record_event("AUTONOMY_ENABLED", {"daily_loss_limit": float(c.max_daily_loss), "baseline_pnl": new_baseline})
-        state.autonomous_daily_loss_limit = float(c.max_daily_loss)
-        state.autonomous_mode = True
-        state.operating_mode = "FULL"
-        state.daily_loss_baseline = new_baseline
+        with _order_gate:
+            if state.kill_switch or not state.bot_enabled:
+                raise HTTPException(409, "Agent stopped or kill switch engaged while enabling autonomy.")
+            state.autonomous_daily_loss_limit = float(c.max_daily_loss)
+            state.autonomous_mode = True
+            state.operating_mode = "FULL"
+            state.daily_loss_baseline = new_baseline
+            state.approval = _paper_approval([_paper_symbol(key) for key in _eligible_paper_instruments()], float(c.max_daily_loss))
         return {"autonomous_mode": True, "max_daily_loss": state.autonomous_daily_loss_limit,
                 "message": "Autonomous paper-trading permission enabled within today's approved loss limit."}
-    state.autonomous_mode = False
-    state.operating_mode = "SEMI"
     record_event("AUTONOMY_DISABLED", {})
+    with _order_gate:
+        state.autonomous_mode = False
+        state.operating_mode = "SEMI"
+        state.approval = None
     return {"autonomous_mode": False, "message": "Autonomous mode disabled."}
 
 @app.post("/api/kill-switch")
 def kill():
-    state.kill_switch = True
-    state.bot_enabled = False
-    state.bot_status = "STOPPED"
-    state.autonomous_mode = False
-    state.operating_mode = "SEMI"
+    # The same short gate protects the final paper-order append. The kill
+    # request never waits behind network, Excel, or audit work.
+    with _order_gate:
+        state.kill_switch = True
+        state.bot_enabled = False
+        state.bot_status = "STOPPED"
+        state.autonomous_mode = False
+        state.operating_mode = "SEMI"
+        state.approval = None
     record_event("EMERGENCY_KILL_SWITCH", {"reason": "user_action", "agent_stopped": True})
     return {"kill_switch": True, "autonomous_mode": False,
             "message": "Kill switch engaged. All new order submissions blocked."}
@@ -319,6 +616,7 @@ def reset_kill_switch():
     state.kill_switch = False
     state.autonomous_mode = False
     state.operating_mode = "SEMI"
+    state.approval = None
     return {"kill_switch": False, "reset": True, "bot_enabled": state.bot_enabled,
             "autonomous_mode": False,
             "message": "Kill switch reset. The agent was not started and autonomy remains off."}
@@ -509,39 +807,67 @@ Requirements:
 
 @app.post("/api/orders/paper")
 def paper_order(s: Signal):
-    if state.execution_mode != "PAPER":
-        raise HTTPException(409, "LIVE mode is selected, but live order routing is not implemented. Switch back to Paper money to submit paper orders.")
+    return _submit_paper_order(s, autonomous_required=False)
+
+
+def _submit_paper_order(s: Signal, *, autonomous_required: bool) -> dict:
     state.reset_daily_counters_if_needed()
-    if not state.bot_enabled:
-        raise HTTPException(403, "Bot is OFF.")
-    if state.kill_switch:
-        raise HTTPException(403, "Kill switch active.")
-    if state.autonomous_mode:
-        loss_limit = state.autonomous_daily_loss_limit
-        if loss_limit is None:
-            state.autonomous_mode = False
-            raise HTTPException(403, "Autonomous mode has no configured daily loss limit.")
-        if current_daily_pnl(state) - state.daily_loss_baseline <= -loss_limit:
-            state.autonomous_mode = False
-            state.operating_mode = "SEMI"
-            state.daily_loss_lock = True
-            record_event("DAILY_LOSS_LOCK_TRIGGERED", {"daily_pnl": current_daily_pnl(state), "baseline": state.daily_loss_baseline, "limit": loss_limit})
-            raise HTTPException(403, "Daily loss limit reached. Autonomous trading locked until manually reset.")
-        if state.daily_loss_lock:
-            raise HTTPException(403, "Daily loss lock active. Use the reset control before re-enabling autonomous trading.")
-        if not readiness()["ready"]:
-            raise HTTPException(403, "Bot is not READY; autonomous orders blocked.")
     try:
-        risk = validate(s,state.approval,state.ticks,state.orders,current_daily_pnl(state))
-        if any(o.get("signal_id")==s.signal_id for o in state.orders):
-            raise ValueError("Duplicate signal_id.")
+        def check_entry_gate(*, final: bool = False):
+            if state.execution_mode != "PAPER":
+                raise HTTPException(409, "Live order routing is unavailable. Switch back to Paper money to submit paper orders.")
+            if not state.bot_enabled:
+                raise HTTPException(403, "Bot is OFF.")
+            if state.kill_switch:
+                raise HTTPException(403, "Kill switch active.")
+            if autonomous_required and (not state.autonomous_mode or state.operating_mode != "FULL"):
+                raise HTTPException(403, "Autonomous mode was disabled before the paper order could be submitted.")
+            if state.autonomous_mode:
+                loss_limit = state.autonomous_daily_loss_limit
+                if loss_limit is None:
+                    raise HTTPException(403, "Autonomous mode has no configured daily loss limit.")
+                pnl = current_daily_pnl(state)
+                if pnl - state.daily_loss_baseline <= -loss_limit:
+                    if not final:
+                        state.autonomous_mode = False
+                        state.operating_mode = "SEMI"
+                        state.daily_loss_lock = True
+                        record_event("DAILY_LOSS_LOCK_TRIGGERED", {"daily_pnl": pnl, "baseline": state.daily_loss_baseline, "limit": loss_limit})
+                    raise HTTPException(403, "Daily loss limit reached. Autonomous trading locked until manually reset.")
+                if state.daily_loss_lock:
+                    raise HTTPException(403, "Daily loss lock active. Use the reset control before re-enabling autonomous trading.")
+                if not final and not readiness()["ready"]:
+                    raise HTTPException(403, "Bot is not READY; autonomous orders blocked.")
+
+        check_entry_gate()
+        if not s.instrument_token.startswith("NSE_EQ|") or s.instrument_token not in UPSTOX_INSTRUMENT_KEYS:
+            raise ValueError("Paper stock orders require a configured NSE_EQ instrument key in UPSTOX_INSTRUMENT_KEYS.")
+        approval = state.approval or _paper_approval([s.symbol])
+        risk = validate(s,approval,state.ticks,state.orders,current_daily_pnl(state))
         order={**s.model_dump(),"status":"OPEN","mode":"PAPER","risk":risk,
                "suggested_entry":s.entry,"suggested_stop_loss":s.stop_loss,"suggested_target":s.target,
                "actual_entry":s.entry,"actual_stop_loss":s.stop_loss,"actual_target":s.target,
                "actual_exit":None,"realised_pnl":None,"created_at":datetime.now(timezone.utc).isoformat()}
-        record_event("PAPER_ORDER_ACCEPTED", order, entity_id=s.signal_id)
-        state.orders.append(order)
+        record_event("PAPER_ORDER_INTENT", order, entity_id=s.signal_id)
+        with _order_gate:
+            # Recheck every switch after audit I/O and atomically append against
+            # kill(). A kill that returns first prevents this order from entering.
+            check_entry_gate(final=True)
+            risk = validate(s, state.approval or approval, state.ticks, state.orders, current_daily_pnl(state))
+            if any(o.get("signal_id")==s.signal_id for o in state.orders):
+                raise ValueError("Duplicate signal_id.")
+            order["risk"] = risk
+            state.orders.append(order)
+        try:
+            record_event("PAPER_ORDER_ACCEPTED", order, entity_id=s.signal_id)
+        except Exception:
+            with _order_gate:
+                if order in state.orders:
+                    state.orders.remove(order)
+            raise
         return {"accepted":True,"mode":"PAPER","risk_rupees":risk,"order":order}
+    except HTTPException:
+        raise
     except Exception as e:
         try: record_event("TRADE_ORDER_REJECTED", {"signal": s.model_dump(), "reason": str(e)}, entity_id=s.signal_id)
         except Exception: pass
@@ -718,10 +1044,42 @@ def decide_candidate(candidate_id: str, d: CandidateDecision):
     expire_pending_candidates()
     if item.get("status") != "PENDING":
         raise HTTPException(409, f"Candidate is {item.get('status')}; only pending suggestions can be decided.")
+    instrument_key = str(item.get("instrument_token", ""))
+    if d.decision == "APPROVED":
+        if state.execution_mode != "PAPER":
+            raise HTTPException(409, "Only paper execution is available for candidate approval in this build.")
+        if not state.bot_enabled or state.kill_switch:
+            raise HTTPException(403, "Start the agent and release the kill switch before submitting a paper trade.")
+        if not instrument_key.startswith("NSE_EQ|") or instrument_key not in UPSTOX_INSTRUMENT_KEYS:
+            raise HTTPException(422, "Candidate is not a configured NSE cash-equity instrument.")
     decision = {"decision": d.decision, "reason": d.reason, "decided_at": datetime.now(timezone.utc).isoformat()}
     record_event("TRADE_CANDIDATE_DECISION", {"candidate": item, **decision}, entity_id=candidate_id)
     item.update(decision); item["status"] = d.decision
-    item["updated_at"] = decision["decided_at"]
+    if d.decision == "APPROVED":
+        risk_per_share = abs(float(item["entry"]) - float(item["stop_loss"]))
+        risk_budget = min(float(MAX_RISK_PER_TRADE), float(PAPER_DEFAULT_DAILY_LOSS_LIMIT) / max(1, min(MAX_TRADES_PER_DAY, 2)), STARTING_CAPITAL * 0.005)
+        quantity = math.floor(risk_budget / risk_per_share) if risk_per_share > 0 else 0
+        if quantity < 1:
+            item.update({"status": "APPROVAL_ORDER_REJECTED", "decision_reason": "Stop distance exceeds the configured paper risk budget."})
+        else:
+            signal = Signal(signal_id=candidate_id, symbol=str(item["symbol"]), instrument_token=instrument_key,
+                            asset_class=item.get("asset_class", "equity"), market_region=item.get("market_region", "India"),
+                            exchange=item.get("exchange", "NSE"), side=item["side"], entry=float(item["entry"]),
+                            stop_loss=float(item["stop_loss"]), target=float(item["target"]), quantity=quantity,
+                            product="I", rationale=str(item.get("rationale", "")),
+                            confidence=float(item.get("confidence", 0)), evidence=item.get("evidence", {}))
+            try:
+                result = paper_order(signal)
+                item.update({"status": "EXECUTED_PAPER", "order_id": candidate_id,
+                             "decision_reason": "Human-approved paper order submitted."})
+                record_event("PAPER_CANDIDATE_APPROVED_AND_SUBMITTED", {"candidate_id": candidate_id,
+                              "order": result.get("order")}, entity_id=candidate_id)
+            except Exception as exc:
+                detail = getattr(exc, "detail", str(exc))
+                item.update({"status": "APPROVAL_ORDER_REJECTED", "decision_reason": str(detail)})
+                record_event("PAPER_CANDIDATE_APPROVAL_REJECTED", {"candidate_id": candidate_id,
+                              "reason": str(detail)}, entity_id=candidate_id)
+    item["updated_at"] = datetime.now(timezone.utc).isoformat()
     try:
         upsert_candidate(item)
     except Exception as exc:

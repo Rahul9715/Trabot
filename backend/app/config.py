@@ -7,6 +7,12 @@ STARTING_CAPITAL = float(os.getenv("STARTING_CAPITAL", "10000"))
 MAX_RISK_PER_TRADE = float(os.getenv("MAX_RISK_PER_TRADE", "50"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "1"))
+PAPER_DEFAULT_DAILY_LOSS_LIMIT = float(os.getenv("PAPER_DEFAULT_DAILY_LOSS_LIMIT", "300"))
+PAPER_MAX_HOLD_MINUTES = max(1, min(int(os.getenv("PAPER_MAX_HOLD_MINUTES", "60")), 390))
+PAPER_ENTRY_CUTOFF_HOUR = int(os.getenv("PAPER_ENTRY_CUTOFF_HOUR", "15"))
+PAPER_ENTRY_CUTOFF_MINUTE = int(os.getenv("PAPER_ENTRY_CUTOFF_MINUTE", "0"))
+PAPER_FORCE_EXIT_HOUR = int(os.getenv("PAPER_FORCE_EXIT_HOUR", "15"))
+PAPER_FORCE_EXIT_MINUTE = int(os.getenv("PAPER_FORCE_EXIT_MINUTE", "25"))
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").strip().lower()
 _provider_key_names = {

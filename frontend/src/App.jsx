@@ -109,6 +109,7 @@ export default function App(){
   const filteredAudit=audit.filter(e=>{const p=e.payload||{};const nested=p.candidate||p.signal||p.order||{};const category=p.asset_class||nested.asset_class||((p.symbol||nested.symbol)?'equity':'');const region=p.market_region||nested.market_region||((p.symbol||nested.symbol)?'India':'');return (!auditFilters.event_type||String(e.event_type||'').toLowerCase().includes(auditFilters.event_type.toLowerCase()))&&(!auditFilters.q||`${e.entity_id||''} ${e.event_type||''} ${JSON.stringify(p)}`.toLowerCase().includes(auditFilters.q.toLowerCase()))&&(!auditFilters.asset_class||String(category).toLowerCase()===auditFilters.asset_class)&&(!auditFilters.market_region||String(region).toLowerCase()===auditFilters.market_region.toLowerCase())&&(!auditFilters.date_from||String(e.occurred_at||'').slice(0,10)>=auditFilters.date_from)&&(!auditFilters.date_to||String(e.occurred_at||'').slice(0,10)<=auditFilters.date_to)});
   const isBotOn=!!status.bot_enabled;
   const isKillActive=!!status.kill_switch;
+  const paperEngine=status.paper_strategy_engine||{};
   const mode=status.operating_mode==='FULL'?'full':'semi';
   const reportNow=new Date();
   const reportStart=new Date(reportNow);
@@ -181,7 +182,19 @@ export default function App(){
         <div className="readiness"><div className={'ready-dot '+(ready?'on':'')}></div><div><b>Readiness: {status.readiness?.status||'CHECKING'}</b><p className="muted">Full mode requires fresh NSE feed data, source-backed global intelligence, a clear kill switch and a healthy audit ledger.</p></div></div>
         <div className="checks">{Object.entries(status.readiness?.checks||{}).map(([k,v])=><span className={'check '+(v?'ok':'pending')} key={k}>{v?'✓':'○'} {k.replaceAll('_',' ')}</span>)}</div>
         <div className="control-row lock-row"><div><b>Daily loss lock: {status.daily_loss_lock?'ACTIVE':'Clear'}</b><p className="muted small">Resetting the daily lock preserves P&amp;L and never re-enables autonomy or releases the kill switch.</p></div><button className="secondary" onClick={resetDailyLock} disabled={!status.daily_loss_lock||isPending('daily-lock')}>Reset daily loss lock</button></div>
-        <p className="muted small">This release controls operating permission; it does not contain an autonomous signal scanner or production order lifecycle.</p>
+        <p className="muted small">Autonomous rule signals and paper exits run only from configured NSE cash-equity feed instruments. Live order routing remains locked pending broker and safety validation.</p>
+      </section>
+      <section className="panel">
+        <div className="panel-title"><Bot/> Autonomous paper engine</div>
+        <div className="kv"><span>Engine</span><b>{paperEngine.status||'STARTING'} · paper only</b></div>
+        <div className="kv"><span>Eligible NSE equities</span><b>{paperEngine.eligible_equity_instruments??0}</b></div>
+        <div className="kv"><span>Strategy warm-up</span><b>{paperEngine.minimum_warmup_bars??30} completed 1m bars per instrument</b></div>
+        <div className="kv"><span>Rules</span><b>{(paperEngine.strategies||[]).join(' · ')||'Loading'}</b></div>
+        <p className="muted">{paperEngine.last_action||'Waiting for live market ticks.'}</p>
+        {paperEngine.error&&<p className="error">Paper engine: {paperEngine.error}</p>}
+        {!!paperEngine.stale_open_positions?.length&&<p className="error">Open paper positions are not receiving fresh exit quotes: {paperEngine.stale_open_positions.join(', ')}. The simulator will not fabricate an exit price.</p>}
+        {!paperEngine.eligible_equity_instruments&&<p className="error">Current default subscriptions are Nifty indices. Add NSE_EQ stock instrument keys to UPSTOX_INSTRUMENT_KEYS in backend/.env and restart FastAPI. Index quotes cannot be submitted as stock orders.</p>}
+        <p className="muted small">Signal scores are rule-strength labels, not win probabilities. This paper simulator does not model fees, taxes, slippage, exchange holidays, or broker fills.</p>
       </section>
       <section className="grid">
         <div className="panel"><div className="panel-title"><RadioTower/> NSE market feed <button onClick={connectFeed} disabled={isPending('feed')}>Connect feed</button></div><p className="muted">Upstox V3 &middot; Feed status: {status.feed_status||'CHECKING'} &middot; {status.feed_instrument_count||0} instrument keys.</p>{status.feed_error&&<p className="error">{status.feed_error}</p>}{!status.feed_token_configured&&<p className="muted">To connect: complete Upstox OAuth, place the current token in backend/.env as UPSTOX_ACCESS_TOKEN, then restart FastAPI. Set subscriptions with UPSTOX_INSTRUMENT_KEYS. The feed starts automatically once both are configured.</p>}
@@ -220,7 +233,7 @@ export default function App(){
     {tab==='reports'&&<>
       <section className="panel">
         <div className="panel-title"><Activity/> Performance reports</div>
-        <p className="muted small">Reports use closed trades and recorded net P&amp;L from this backend runtime. No trade history is persisted across restarts in this build; empty results mean there is no recorded sample, not zero risk.</p>
+        <p className="muted small">Reports use closed trades and paper P&amp;L before broker fees, taxes, and slippage. No trade history is persisted across restarts in this build; empty results mean there is no recorded sample, not zero risk.</p>
         <div className="filter-bar report-filters">
           <label className="filter-field">Window<select value={reportWindow} onChange={e=>setReportWindow(e.target.value)}><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option></select></label>
           <FilterSelect label="Market" value={reportRegion} onChange={setReportRegion} options={['India','US','Global']}/>
@@ -232,11 +245,11 @@ export default function App(){
         <div className="stats report-stats">
           <Metric title="Closed trades" value={reportTrades.length}/>
           <Metric title="Win rate · sample only" value={reportTrades.length?`${((winCount/reportTrades.length)*100).toFixed(1)}%`:'—'}/>
-          <Metric title="Net realized P&L" value={`₹${reportPnl.toLocaleString('en-IN',{maximumFractionDigits:2})}`}/>
+          <Metric title="Paper P&L before costs" value={`₹${reportPnl.toLocaleString('en-IN',{maximumFractionDigits:2})}`}/>
           <Metric title="Wins / losses" value={`${winCount} / ${lossCount}`}/>
         </div>
         <div className="report-grid">
-          <div className="chart-card"><h3>Daily net P&amp;L</h3>{reportByDay.length?<ResponsiveContainer width="100%" height={280}><BarChart data={reportByDay}><CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/><XAxis dataKey="date" tick={{fill:'var(--muted)',fontSize:11}}/><YAxis tick={{fill:'var(--muted)',fontSize:11}}/><Tooltip contentStyle={{background:'var(--surface)',borderColor:'var(--border)',color:'var(--text)'}}/><Legend/><Bar dataKey="pnl" name="Net P&L (₹)" fill="var(--chart-accent)" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>:<div className="chart-empty">Close paper trades to build the daily P&amp;L chart.</div>}</div>
+          <div className="chart-card"><h3>Daily paper P&amp;L before costs</h3>{reportByDay.length?<ResponsiveContainer width="100%" height={280}><BarChart data={reportByDay}><CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/><XAxis dataKey="date" tick={{fill:'var(--muted)',fontSize:11}}/><YAxis tick={{fill:'var(--muted)',fontSize:11}}/><Tooltip contentStyle={{background:'var(--surface)',borderColor:'var(--border)',color:'var(--text)'}}/><Legend/><Bar dataKey="pnl" name="Paper P&L (₹)" fill="var(--chart-accent)" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>:<div className="chart-empty">Close paper trades to build the daily P&amp;L chart.</div>}</div>
           <div className="chart-card"><h3>Trade outcomes</h3>{outcomes.length?<ResponsiveContainer width="100%" height={280}><PieChart><Pie data={outcomes} dataKey="value" nameKey="name" innerRadius={58} outerRadius={92} paddingAngle={3} label>{outcomes.map(entry=><Cell key={entry.name} fill={entry.color}/>)}</Pie><Tooltip contentStyle={{background:'var(--surface)',borderColor:'var(--border)',color:'var(--text)'}}/><Legend/></PieChart></ResponsiveContainer>:<div className="chart-empty">No closed trades in this window.</div>}</div>
         </div>
       </section>
