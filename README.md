@@ -36,6 +36,12 @@ The dashboard now includes an experimental rules-based paper engine. It builds c
 
 The default feed keys are Nifty indices and are not individual stock order instruments. To scan stocks, replace or extend `UPSTOX_INSTRUMENT_KEYS` in the local `backend/.env` with valid `NSE_EQ|...` stock keys from Upstox, then restart FastAPI. Strategy scores are not probabilities. This prototype has no market holiday calendar, does not model charges/taxes/slippage or broker fills, and has no validated out-of-sample performance. It does not promise profits. Live routing remains disabled pending broker/compliance validation, complete order/fill recovery, and the required safety review.
 
+### Global markets paper feed
+
+The optional Twelve Data adapter adds US equities, FX, and configured spot-commodity symbols to a separate USD-denominated local paper account. Set `TWELVE_DATA_API_KEY` and opt-in comma-separated symbols in `TWELVE_DATA_US_EQUITIES`, `TWELVE_DATA_FOREX`, and/or `TWELVE_DATA_COMMODITIES` in `backend/.env`, then restart FastAPI. Example symbols are `AAPL`, `EUR/USD`, and `XAU/USD`; symbol availability and real-time access depend on the user's Twelve Data plan. The scanner builds bars from received quotes and needs 30 completed one-minute bars before evaluating the same rules used by the India paper scanner. No historical prices are fabricated for warm-up.
+
+USD capital, per-trade risk, and daily loss limits use `PAPER_GLOBAL_STARTING_CAPITAL_USD`, `PAPER_GLOBAL_MAX_RISK_USD`, and `PAPER_GLOBAL_DAILY_LOSS_LIMIT_USD`; these settings and P&L are not converted to or combined with INR. US equities are limited to regular New York session hours. FX is generally 24/5, not 24/7. This initial global engine approximates configured FX and spot-commodity symbols as 24/5 and does not yet have a venue-specific holiday/maintenance calendar, exchange execution, financing, spreads, commissions, or slippage model. All fills are local paper simulations; live order routing remains disabled.
+
 ## Source baseline
 
 The unreleased dashboard changes add a separate Intelligence tab, daily/weekly/monthly performance charts and outcome breakdowns, symbol/market/asset/date filters, grayscale and high-contrast dark themes, and an experimental paper-only strategy worker. Live order routing remains locked.

@@ -52,6 +52,21 @@ UPSTOX_INSTRUMENT_KEYS = [
 UPSTOX_MODE = os.getenv("UPSTOX_MODE", "sandbox").lower()
 UPSTOX_SANDBOX_TOKEN = os.getenv("UPSTOX_SANDBOX_TOKEN", "")
 
+# Twelve Data supplies global paper-market quotes only; all orders remain in
+# Trabot's local paper simulator. Lists are deliberately opt-in and have no
+# default symbols so a newly configured key cannot start trading an unknown set.
+TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
+TWELVE_DATA_US_EQUITIES = [s.strip().upper() for s in os.getenv("TWELVE_DATA_US_EQUITIES", "").split(",") if s.strip()]
+TWELVE_DATA_FOREX = [s.strip().upper() for s in os.getenv("TWELVE_DATA_FOREX", "").split(",") if s.strip()]
+TWELVE_DATA_COMMODITIES = [s.strip().upper() for s in os.getenv("TWELVE_DATA_COMMODITIES", "").split(",") if s.strip()]
+PAPER_GLOBAL_STARTING_CAPITAL_USD = float(os.getenv("PAPER_GLOBAL_STARTING_CAPITAL_USD", "10000"))
+PAPER_GLOBAL_MAX_RISK_USD = float(os.getenv("PAPER_GLOBAL_MAX_RISK_USD", "10"))
+PAPER_GLOBAL_DAILY_LOSS_LIMIT_USD = float(os.getenv("PAPER_GLOBAL_DAILY_LOSS_LIMIT_USD", "100"))
+PAPER_GLOBAL_MAX_TRADES_PER_DAY = max(1, min(int(os.getenv("PAPER_GLOBAL_MAX_TRADES_PER_DAY", "3")), 20))
+PAPER_GLOBAL_MAX_HOLD_MINUTES = max(1, min(int(os.getenv("PAPER_GLOBAL_MAX_HOLD_MINUTES", "240")), 10080))
+if PAPER_GLOBAL_STARTING_CAPITAL_USD <= 0 or PAPER_GLOBAL_MAX_RISK_USD <= 0 or PAPER_GLOBAL_DAILY_LOSS_LIMIT_USD <= 0:
+    raise RuntimeError("Global paper capital, per-trade risk, and daily loss limit must all be positive USD values.")
+
 LIVE_TRADING_ENABLED = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
 LIVE_TRADING_ACK = os.getenv("LIVE_TRADING_ACK", "")
 

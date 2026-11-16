@@ -32,9 +32,13 @@ from .search_provider import search_searxng, format_search_evidence, SearchProvi
 from .excel_log import upsert_candidate, ensure_export
 from .schemas import Candidate, CandidateDecision, TradeUpdate
 from .paper_strategies import MinuteBarBook, evaluate_strategies
+from .twelve_data_feed import global_feed, configured_instruments
+from .global_paper import (worker as global_paper_worker, global_account, GLOBAL_ORDER_GATE,
+                           submit_approved_candidate)
+from .config import TWELVE_DATA_API_KEY
 
 _intelligence_refresh_lock = threading.Lock()
-_order_gate = threading.Lock()
+_order_gate = GLOBAL_ORDER_GATE
 _paper_bar_book = MinuteBarBook()
 _paper_processed_ticks: dict[str, str] = {}
 _paper_seen_bars: set[tuple[str, str]] = set()
@@ -77,7 +81,7 @@ def _stale_open_positions(now: datetime | None = None) -> list[str]:
     now = now or datetime.now(timezone.utc)
     stale = []
     for order in state.orders:
-        if order.get("status") != "OPEN":
+        if order.get("status") != "OPEN" or order.get("currency", "INR") != "INR":
             continue
         tick = state.ticks.get(order.get("instrument_token"))
         received = _aware_utc(tick.get("received_at") if tick else None)
@@ -208,6 +212,7 @@ async def _paper_strategy_worker():
                 pnl = current_daily_pnl(state)
                 if pnl - state.daily_loss_baseline <= -state.autonomous_daily_loss_limit:
                     state.autonomous_mode = False
+                    state.global_autonomous_mode = False
                     state.operating_mode = "SEMI"
                     state.daily_loss_lock = True
                     record_event("DAILY_LOSS_LOCK_TRIGGERED", {
@@ -308,6 +313,7 @@ async def lifespan(_app):
     init_audit()
     research_task = asyncio.create_task(_intelligence_worker(), name="global-intelligence-worker")
     strategy_task = asyncio.create_task(_paper_strategy_worker(), name="paper-strategy-worker")
+    global_task = asyncio.create_task(global_paper_worker(), name="global-paper-strategy-worker")
     if UPSTOX_ACCESS_TOKEN and UPSTOX_INSTRUMENT_KEYS:
         try:
             await asyncio.to_thread(feed.start, UPSTOX_INSTRUMENT_KEYS)
@@ -318,14 +324,29 @@ async def lifespan(_app):
         state.feed_status = "CONFIGURATION_REQUIRED"
         state.feed_error = "Set UPSTOX_ACCESS_TOKEN and UPSTOX_INSTRUMENT_KEYS in backend/.env to start the Upstox feed automatically."
     try:
+        global_instruments = configured_instruments()
+        if global_instruments and TWELVE_DATA_API_KEY:
+            await asyncio.to_thread(global_feed.start)
+        else:
+            state.global_feed_status = "CONFIGURATION_REQUIRED"
+            state.global_feed_connected = False
+            state.global_feed_error = "Set TWELVE_DATA_API_KEY and at least one TWELVE_DATA_* symbol list in backend/.env."
+    except Exception as exc:
+        state.global_feed_status = "CONFIGURATION_ERROR"
+        state.global_feed_connected = False
+        state.global_feed_error = str(exc)
+    try:
         yield
     finally:
         research_task.cancel()
         strategy_task.cancel()
-        await asyncio.gather(research_task, strategy_task, return_exceptions=True)
+        global_task.cancel()
+        await asyncio.gather(research_task, strategy_task, global_task, return_exceptions=True)
         feed.stop()
+        global_feed.stop()
         state.intelligence_worker_status = "STOPPED"
         state.strategy_worker_status = "STOPPED"
+        state.global_strategy_status = "STOPPED"
 
 
 app = FastAPI(title="AI Trading Desk", version="2.4.0", lifespan=lifespan)
@@ -392,13 +413,20 @@ def readiness():
             intel_ok = intel_age <= INTELLIGENCE_MAX_AGE_MINUTES * 60 and bool(state.intelligence_sources)
         except Exception:
             pass
-    feed_ok = bool(state.connected and state.last_feed_at)
-    if feed_ok:
+    feed_ok = False
+    freshest = None
+    feed_stamps = [state.last_feed_at] if state.connected else []
+    feed_stamps.extend(state.ticks.get(row["instrument_token"], {}).get("received_at")
+                       for row in configured_instruments())
+    for stamp in feed_stamps:
         try:
-            feed_age = (now - datetime.fromisoformat(state.last_feed_at)).total_seconds()
-            feed_ok = feed_age <= 10
+            feed_age = (now - datetime.fromisoformat(stamp)).total_seconds() if stamp else float("inf")
+            if 0 <= feed_age <= 10:
+                feed_ok = True
+                freshest = stamp
+                break
         except Exception:
-            feed_ok = False
+            continue
     audit_ok = audit_health()["available"]
     ready = bool(state.bot_enabled and intel_ok and feed_ok and audit_ok and not state.kill_switch and not state.daily_loss_lock)
     return {
@@ -414,7 +442,7 @@ def readiness():
             "audit_ledger_available": audit_ok
         },
         "intelligence_age_seconds": round(intel_age, 1) if intel_age is not None else None,
-        "feed_last_update": state.last_feed_at,
+        "feed_last_update": freshest or state.last_feed_at,
         "intelligence_last_update": state.intelligence_updated_at
     }
 
@@ -439,6 +467,14 @@ async def audit_api_requests(request, call_next):
 @app.get("/api/status")
 def status():
     state.reset_daily_counters_if_needed()
+    try:
+        global_instruments = configured_instruments()
+    except ValueError as exc:
+        global_instruments = []
+        if state.global_feed_status != "ERROR":
+            state.global_feed_status = "CONFIGURATION_ERROR"
+            state.global_feed_error = str(exc)
+    global_acct = global_account()
     return {
         "mode": state.execution_mode.lower(), "execution_mode": state.execution_mode,
         "live_orders_enabled": False,
@@ -473,6 +509,28 @@ def status():
             "mode": "paper_only",
             "stale_open_positions": _stale_open_positions(),
         },
+        "global_market_feed": {
+            "provider": "Twelve Data", "status": state.global_feed_status,
+            "connected": state.global_feed_connected,
+            "configured": bool(TWELVE_DATA_API_KEY and global_instruments),
+            "api_key_configured": bool(TWELVE_DATA_API_KEY),
+            "error": state.global_feed_error,
+            "last_update": state.global_feed_last_update,
+            "symbols": state.global_feed_symbols or global_instruments,
+            "live_orders_enabled": False,
+        },
+        "global_paper_engine": {
+            "status": state.global_strategy_status,
+            "last_scan": state.global_strategy_last_scan,
+            "last_action": state.global_strategy_last_action,
+            "error": state.global_strategy_error,
+            "eligible_instruments": len(global_instruments),
+            "autonomous_enabled": state.global_autonomous_mode,
+            "warmup_bars": 30,
+            "strategies": ["ema_8_21_crossover", "donchian_20_breakout", "rsi_14_reentry"],
+            "account": global_acct,
+            "mode": "paper_only",
+        },
         "readiness": readiness(), "intelligence_status": state.intelligence_status,
         "last_error": state.last_error
     }
@@ -500,6 +558,7 @@ def bot_control(c: BotControl):
         with _order_gate:
             state.bot_enabled = False
             state.autonomous_mode = False
+            state.global_autonomous_mode = False
             state.operating_mode = "SEMI"
             state.approval = None
         record_event("BOT_STOPPED", {"autonomy_revoked": True})
@@ -513,6 +572,7 @@ def bot_control(c: BotControl):
         state.bot_status = "STARTING"
         state.operating_mode = "SEMI"
         state.autonomous_mode = False
+        state.global_autonomous_mode = False
         state.autonomous_daily_loss_limit = None
         state.approval = None
     record_event("BOT_STARTED", {"mode": "paper"})
@@ -531,16 +591,23 @@ def set_bot_mode(c: BotModeControl):
         with _order_gate:
             state.operating_mode = "SEMI"
             state.autonomous_mode = False
+            state.global_autonomous_mode = False
             state.autonomous_daily_loss_limit = None
             state.approval = None
         return {"mode": "SEMI", "autonomous_mode": False,
                 "message": "Semi-autonomous mode: suggestions require a human decision."}
     if c.max_daily_loss is None:
         raise HTTPException(400, "Set a positive daily loss limit before enabling full autonomy.")
-    if not _eligible_paper_instruments():
-        raise HTTPException(409, "Full autonomy needs at least one NSE cash-equity key (NSE_EQ|...) in UPSTOX_INSTRUMENT_KEYS. Index keys are not stock order instruments.")
+    if not _eligible_paper_instruments() and not configured_instruments():
+        raise HTTPException(409, "Full autonomy needs a configured NSE_EQ equity or a Twelve Data global paper symbol.")
+    if not _eligible_paper_instruments() and not any(
+        state.ticks.get(row["instrument_token"], {}).get("received_at") for row in configured_instruments()
+    ):
+        raise HTTPException(409, "Wait for a fresh Twelve Data quote before enabling global paper autonomy.")
     if state.daily_loss_lock:
         raise HTTPException(409, "Daily loss lock is active. Reset it explicitly before enabling full autonomy.")
+    if configured_instruments() and global_account()["daily_loss_lock"]:
+        raise HTTPException(409, "Global USD daily loss lock is active. Reset that lock explicitly before enabling full autonomy.")
     if not readiness()["ready"]:
         raise HTTPException(409, "Agent is not READY. Fresh market data, source-backed intelligence, and audit availability are required.")
     baseline = current_daily_pnl(state)
@@ -552,7 +619,8 @@ def set_bot_mode(c: BotModeControl):
         state.autonomous_daily_loss_limit = float(c.max_daily_loss)
         state.daily_loss_baseline = baseline
         state.autonomous_mode = True
-        state.approval = _paper_approval([_paper_symbol(key) for key in _eligible_paper_instruments()], float(c.max_daily_loss))
+        state.global_autonomous_mode = bool(configured_instruments())
+        state.approval = _paper_approval([_paper_symbol(key) for key in _eligible_paper_instruments()], float(c.max_daily_loss)) if _eligible_paper_instruments() else None
     return {"mode": "FULL", "autonomous_mode": True,
             "message": "Full-autonomy permission is enabled within the configured paper-trading loss limit."}
 
@@ -566,10 +634,16 @@ def autonomy(c: AutonomyConfig):
             raise HTTPException(409, "Reset the emergency kill switch explicitly before enabling autonomy.")
         if c.max_daily_loss is None:
             raise HTTPException(400, "Enter a maximum daily loss limit before enabling autonomous mode.")
-        if not _eligible_paper_instruments():
-            raise HTTPException(409, "Autonomy needs at least one NSE cash-equity key (NSE_EQ|...) in UPSTOX_INSTRUMENT_KEYS. Index keys are not stock order instruments.")
+        if not _eligible_paper_instruments() and not configured_instruments():
+            raise HTTPException(409, "Autonomy needs a configured NSE_EQ equity or a Twelve Data global paper symbol.")
+        if not _eligible_paper_instruments() and not any(
+            state.ticks.get(row["instrument_token"], {}).get("received_at") for row in configured_instruments()
+        ):
+            raise HTTPException(409, "Wait for a fresh Twelve Data quote before enabling global paper autonomy.")
         if state.daily_loss_lock:
             raise HTTPException(409, "Daily loss lock is active. Reset it explicitly before enabling autonomy.")
+        if configured_instruments() and global_account()["daily_loss_lock"]:
+            raise HTTPException(409, "Global USD daily loss lock is active. Reset that lock explicitly before enabling autonomy.")
         if not readiness()["ready"]:
             raise HTTPException(409, "Bot is not READY. Update global intelligence and establish a fresh market feed first.")
         new_baseline = current_daily_pnl(state)
@@ -579,14 +653,16 @@ def autonomy(c: AutonomyConfig):
                 raise HTTPException(409, "Agent stopped or kill switch engaged while enabling autonomy.")
             state.autonomous_daily_loss_limit = float(c.max_daily_loss)
             state.autonomous_mode = True
+            state.global_autonomous_mode = bool(configured_instruments())
             state.operating_mode = "FULL"
             state.daily_loss_baseline = new_baseline
-            state.approval = _paper_approval([_paper_symbol(key) for key in _eligible_paper_instruments()], float(c.max_daily_loss))
+            state.approval = _paper_approval([_paper_symbol(key) for key in _eligible_paper_instruments()], float(c.max_daily_loss)) if _eligible_paper_instruments() else None
         return {"autonomous_mode": True, "max_daily_loss": state.autonomous_daily_loss_limit,
                 "message": "Autonomous paper-trading permission enabled within today's approved loss limit."}
     record_event("AUTONOMY_DISABLED", {})
     with _order_gate:
         state.autonomous_mode = False
+        state.global_autonomous_mode = False
         state.operating_mode = "SEMI"
         state.approval = None
     return {"autonomous_mode": False, "message": "Autonomous mode disabled."}
@@ -600,6 +676,7 @@ def kill():
         state.bot_enabled = False
         state.bot_status = "STOPPED"
         state.autonomous_mode = False
+        state.global_autonomous_mode = False
         state.operating_mode = "SEMI"
         state.approval = None
     record_event("EMERGENCY_KILL_SWITCH", {"reason": "user_action", "agent_stopped": True})
@@ -719,6 +796,23 @@ def connect_market(payload: dict):
 def latest():
     return {"connected": state.connected, "status": state.feed_status, "error": state.feed_error, "ticks": state.ticks, "last_feed_at": state.last_feed_at}
 
+
+@app.post("/api/market/global/connect")
+def connect_global_market():
+    try:
+        result = global_feed.start()
+        if not result.get("started"):
+            raise HTTPException(409, result.get("error", "Twelve Data feed is not configured."))
+        record_event("GLOBAL_MARKET_FEED_CONNECT_REQUESTED", {"provider": "Twelve Data", "symbols": result.get("symbols", [])})
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        state.global_feed_status = "ERROR"
+        state.global_feed_connected = False
+        state.global_feed_error = f"Twelve Data feed could not start: {type(exc).__name__}: {exc}"
+        raise HTTPException(502, state.global_feed_error)
+
 @app.websocket("/ws/market")
 async def market_ws(ws: WebSocket):
     await ws.accept()
@@ -830,6 +924,7 @@ def _submit_paper_order(s: Signal, *, autonomous_required: bool) -> dict:
                 if pnl - state.daily_loss_baseline <= -loss_limit:
                     if not final:
                         state.autonomous_mode = False
+                        state.global_autonomous_mode = False
                         state.operating_mode = "SEMI"
                         state.daily_loss_lock = True
                         record_event("DAILY_LOSS_LOCK_TRIGGERED", {"daily_pnl": pnl, "baseline": state.daily_loss_baseline, "limit": loss_limit})
@@ -918,7 +1013,10 @@ def update_paper_trade(signal_id: str, u: TradeUpdate):
                         "exit_reason": changes.get("exit_reason", "Manual paper close"),
                         "closed_at": datetime.now(timezone.utc).isoformat()})
         record_event("PAPER_TRADE_CLOSED", {"before": order.copy(), "changes": changes}, entity_id=signal_id)
-        state.daily_realised_pnl += net
+        if order.get("currency") == "USD":
+            state.global_daily_realised_pnl_usd += net
+        else:
+            state.daily_realised_pnl += net
     else:
         record_event("PAPER_TRADE_MODIFIED", {"before": order.copy(), "changes": changes}, entity_id=signal_id)
     order.update(changes)
@@ -936,8 +1034,8 @@ def account():
         record_event("DAILY_LOSS_LOCK_TRIGGERED", {"daily_pnl": pnl, "baseline": state.daily_loss_baseline, "limit": loss_limit})
     return {"starting_capital":STARTING_CAPITAL,"realised_pnl":state.daily_realised_pnl,
             "unrealised_pnl":round(pnl-state.daily_realised_pnl,2),"daily_pnl":round(pnl,2),
-            "autonomous_loss_limit":loss_limit,"daily_loss_lock":state.daily_loss_lock,"daily_loss_baseline":state.daily_loss_baseline,"open_positions":sum(1 for o in state.orders if o["status"]=="OPEN"),
-            "orders_today":len(state.orders),"mode":"PAPER"}
+            "autonomous_loss_limit":loss_limit,"daily_loss_lock":state.daily_loss_lock,"daily_loss_baseline":state.daily_loss_baseline,"open_positions":sum(1 for o in state.orders if o["status"]=="OPEN" and o.get("currency", "INR")=="INR"),
+            "orders_today":sum(1 for o in state.orders if o.get("currency", "INR")=="INR"),"mode":"PAPER"}
 
 
 @app.post("/api/daily-lock/reset")
@@ -951,7 +1049,26 @@ def reset_daily_lock():
     state.daily_loss_lock = False
     # Reset never releases emergency kill switch or turns autonomy back on.
     state.autonomous_mode = False
+    state.global_autonomous_mode = False
     return {"reset": True, "cumulative_daily_pnl": round(pnl, 2), "new_loss_allowance": state.autonomous_daily_loss_limit, "autonomy_reenabled": False}
+
+
+@app.post("/api/global-daily-lock/reset")
+def reset_global_daily_lock():
+    account_snapshot = global_account()
+    if not state.global_daily_loss_lock:
+        return {"reset": False, "message": "Global USD daily loss lock is not active."}
+    baseline = float(account_snapshot["daily_pnl"])
+    record_event("GLOBAL_DAILY_LOSS_LOCK_RESET", {
+        "cumulative_daily_pnl_usd": baseline,
+        "new_baseline_usd": baseline,
+        "autonomy_reenabled": False,
+    })
+    state.global_daily_loss_baseline_usd = baseline
+    state.global_daily_loss_lock = False
+    return {"reset": True, "cumulative_daily_pnl_usd": baseline,
+            "new_loss_allowance_usd": account_snapshot["daily_loss_limit"],
+            "autonomy_reenabled": False}
 
 
 @app.post("/api/candidates")
@@ -1050,12 +1167,33 @@ def decide_candidate(candidate_id: str, d: CandidateDecision):
             raise HTTPException(409, "Only paper execution is available for candidate approval in this build.")
         if not state.bot_enabled or state.kill_switch:
             raise HTTPException(403, "Start the agent and release the kill switch before submitting a paper trade.")
-        if not instrument_key.startswith("NSE_EQ|") or instrument_key not in UPSTOX_INSTRUMENT_KEYS:
+        is_global = instrument_key.startswith(("TD_US_EQ|", "TD_FX|", "TD_COMMODITY|"))
+        if not is_global and (not instrument_key.startswith("NSE_EQ|") or instrument_key not in UPSTOX_INSTRUMENT_KEYS):
             raise HTTPException(422, "Candidate is not a configured NSE cash-equity instrument.")
+        if is_global and state.operating_mode == "FULL":
+            raise HTTPException(409, "Manual approval is disabled while full autonomy is selected.")
     decision = {"decision": d.decision, "reason": d.reason, "decided_at": datetime.now(timezone.utc).isoformat()}
     record_event("TRADE_CANDIDATE_DECISION", {"candidate": item, **decision}, entity_id=candidate_id)
     item.update(decision); item["status"] = d.decision
     if d.decision == "APPROVED":
+        if instrument_key.startswith(("TD_US_EQ|", "TD_FX|", "TD_COMMODITY|")):
+            try:
+                order = submit_approved_candidate(item)
+                item.update({"status": "EXECUTED_PAPER", "order_id": candidate_id,
+                             "decision_reason": "Human-approved global paper order submitted in USD."})
+                record_event("GLOBAL_PAPER_CANDIDATE_APPROVED_AND_SUBMITTED", {"candidate_id": candidate_id,
+                              "order": order}, entity_id=candidate_id)
+            except Exception as exc:
+                item.update({"status": "APPROVAL_ORDER_REJECTED", "decision_reason": str(exc)})
+                record_event("GLOBAL_PAPER_CANDIDATE_APPROVAL_REJECTED", {"candidate_id": candidate_id,
+                              "reason": str(exc)}, entity_id=candidate_id)
+            item["updated_at"] = datetime.now(timezone.utc).isoformat()
+            try:
+                upsert_candidate(item)
+            except Exception as exc:
+                record_event("TRADE_CANDIDATE_XLSX_WRITE_FAILED", {"reason": str(exc)}, entity_id=candidate_id)
+                raise HTTPException(503, "Decision was audited but the Excel log could not be updated.")
+            return item
         risk_per_share = abs(float(item["entry"]) - float(item["stop_loss"]))
         risk_budget = min(float(MAX_RISK_PER_TRADE), float(PAPER_DEFAULT_DAILY_LOSS_LIMIT) / max(1, min(MAX_TRADES_PER_DAY, 2)), STARTING_CAPITAL * 0.005)
         quantity = math.floor(risk_budget / risk_per_share) if risk_per_share > 0 else 0

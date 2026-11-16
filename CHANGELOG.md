@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Twelve Data global paper markets
+- Add optional Twelve Data WebSocket quote ingestion for explicitly configured US equities, FX pairs, and spot commodity symbols.
+- Add a separate USD paper account, risk caps, daily loss lock, trade-count cap, market-session gates, 30-real-bar warm-up, suggestions, semi-mode human approval, and full-mode local paper orders.
+- Keep global USD P&L and open positions separate from INR account totals and add a currency selector to performance reports.
+- Live routing remains disabled. Twelve Data plan entitlements, exact venue schedules/holidays, spot-commodity maintenance windows, spread, fees, slippage, financing, historical recovery, and strategy performance are not validated by this integration.
+- Validation: 16 focused backend tests passed, Python app/tests compiled, and the Vite production build succeeded. No Twelve Data account key was used for an external connection test.
+
 ## Unreleased — Experimental autonomous paper strategy engine
 - Add a feed-driven paper scanner with 1-minute EMA crossover, Donchian breakout, and RSI re-entry rules, plus paper-only entry sizing and observed-tick exits.
 - Add NSE-equity instrument eligibility checks, warm-up/status reporting, stale-feed handling, bounded bar deduplication, and regression coverage for kill-switch and autonomy/order races.

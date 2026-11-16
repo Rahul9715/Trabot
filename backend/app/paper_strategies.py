@@ -41,11 +41,12 @@ class Setup:
 class MinuteBarBook:
     """Build completed minute OHLC bars from actual timestamped LTP updates."""
 
-    def __init__(self, max_bars: int = HISTORY_BARS):
+    def __init__(self, max_bars: int = HISTORY_BARS, session_timezone: str = "Asia/Kolkata"):
         self.history: dict[str, deque[Bar]] = {}
         self.current: dict[str, Bar] = {}
         self.sessions: dict[str, object] = {}
         self.max_bars = max_bars
+        self.session_timezone = session_timezone
 
     def add_tick(self, instrument: str, price: float, timestamp: datetime) -> Bar | None:
         if not math.isfinite(price) or price <= 0:
@@ -53,7 +54,7 @@ class MinuteBarBook:
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=timezone.utc)
         timestamp = timestamp.astimezone(timezone.utc)
-        session_date = timestamp.astimezone(ZoneInfo("Asia/Kolkata")).date()
+        session_date = timestamp.astimezone(ZoneInfo(self.session_timezone)).date()
         if self.sessions.get(instrument) != session_date:
             self.sessions[instrument] = session_date
             self.history[instrument] = deque(maxlen=self.max_bars)

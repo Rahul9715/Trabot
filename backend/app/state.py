@@ -13,11 +13,25 @@ class RuntimeState:
         self.feed_status = "NOT_CONFIGURED"
         self.feed_error = None
         self.last_feed_at = None
+        self.global_feed_status = "NOT_CONFIGURED"
+        self.global_feed_connected = False
+        self.global_feed_error = None
+        self.global_feed_last_update = None
+        self.global_feed_symbols = []
+        self.global_strategy_status = "NOT_CONFIGURED"
+        self.global_strategy_last_scan = None
+        self.global_strategy_last_action = "Configure Twelve Data and global paper symbols to enable this engine."
+        self.global_strategy_error = None
+        self.global_daily_realised_pnl_usd = 0.0
+        self.global_daily_loss_baseline_usd = 0.0
+        self.global_daily_date = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        self.global_daily_loss_lock = False
         # The emergency stop starts released; the bot itself remains stopped.
         self.kill_switch = False
         self.bot_enabled = False
         self.bot_status = "STOPPED"
         self.autonomous_mode = False
+        self.global_autonomous_mode = False
         self.operating_mode = "SEMI"
         self.execution_mode = "PAPER"
         self.autonomous_daily_loss_limit = None
@@ -44,16 +58,18 @@ class RuntimeState:
     def reset_daily_counters_if_needed(self):
         today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
         if today != self.daily_date:
+            keep_global_autonomy = bool(self.global_autonomous_mode and self.bot_enabled and not self.kill_switch)
             self.daily_date = today
             self.daily_realised_pnl = 0.0
-            self.autonomous_mode = False
-            self.autonomous_daily_loss_limit = None
+            self.autonomous_mode = keep_global_autonomy
+            if not keep_global_autonomy:
+                self.autonomous_daily_loss_limit = None
             self.daily_loss_lock = False
             self.daily_loss_baseline = 0.0
             self.approval = None
             # The emergency switch is independent of day counters. A daily
             # rollover must never release an engaged kill switch.
-            self.operating_mode = "SEMI"
+            self.operating_mode = "FULL" if keep_global_autonomy else "SEMI"
 
 state = RuntimeState()
 

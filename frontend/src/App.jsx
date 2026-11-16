@@ -34,6 +34,7 @@ export default function App(){
   const [reportWindow,setReportWindow]=useState('month');
   const [reportRegion,setReportRegion]=useState('');
   const [reportAsset,setReportAsset]=useState('');
+  const [reportCurrency,setReportCurrency]=useState('INR');
   const [reportSymbol,setReportSymbol]=useState('');
   const [reportFrom,setReportFrom]=useState('');
   const [reportTo,setReportTo]=useState('');
@@ -81,7 +82,9 @@ export default function App(){
     if(result){setShowLiveConfirm(false);setLiveConfirmation('')}
   };
   const connectFeed=()=>action('feed',()=>call('/api/market/connect','POST',{}),'Market feed connection requested.');
+  const connectGlobalFeed=()=>action('global-feed',()=>call('/api/market/global/connect','POST',{}),'Twelve Data global feed connection requested.');
   const resetDailyLock=()=>action('daily-lock',()=>call('/api/daily-lock/reset','POST',{}),r=>r.reset?'Daily loss lock reset. Autonomy remains off.':r.message);
+  const resetGlobalDailyLock=()=>action('global-daily-lock',()=>call('/api/global-daily-lock/reset','POST',{}),r=>r.reset?'USD daily loss lock reset. Autonomy remains as configured.':r.message);
   const decideCandidate=(id,decision)=>action(`candidate:${id}`,()=>call(`/api/candidates/${id}/decision`,'POST',{decision,reason:`${decision} from dashboard`}),`Suggestion ${decision.toLowerCase()}.`);
   const verifyAudit=()=>action('audit',()=>call('/api/audit/verify'),r=>r.valid?`Audit chain verified: ${r.verified_events} events.`:`Audit chain integrity failure at sequence ${r.failed_seq}.`);
 
@@ -121,7 +124,7 @@ export default function App(){
   const reportTrades=orders.filter(o=>{
     if(o.status!=='CLOSED'||typeof o.realised_pnl!=='number')return false;
     const closedAt=new Date(o.closed_at||o.created_at);
-    return closedAt>=reportStart&&closedAt<=reportEnd&&(!reportRegion||String(o.market_region||'India')===reportRegion)&&(!reportAsset||String(o.asset_class||'equity')===reportAsset)&&(!reportSymbol||String(o.symbol||'').toLowerCase().includes(reportSymbol.toLowerCase()));
+    return closedAt>=reportStart&&closedAt<=reportEnd&&String(o.currency||'INR')===reportCurrency&&(!reportRegion||String(o.market_region||'India')===reportRegion)&&(!reportAsset||String(o.asset_class||'equity')===reportAsset)&&(!reportSymbol||String(o.symbol||'').toLowerCase().includes(reportSymbol.toLowerCase()));
   });
   const winCount=reportTrades.filter(o=>o.realised_pnl>0).length;
   const lossCount=reportTrades.filter(o=>o.realised_pnl<0).length;
@@ -178,8 +181,8 @@ export default function App(){
             {mode==='full'&&<span className="pill amber">DAILY LOSS LIMIT ₹{status.autonomous_daily_loss_limit??'—'}</span>}
           </div>
         </div>
-        <div className="autonomy-form"><label>Daily loss limit (₹)<input type="number" min="1" step="1" value={lossLimit} onChange={e=>setLossLimit(e.target.value)} placeholder="Required for full mode"/></label><button onClick={()=>changeMode('full')} disabled={isPending('mode')||!isBotOn||isKillActive||!ready||!lossLimit||Number(lossLimit)<=0}>Apply full-autonomy limit</button></div>
-        <div className="readiness"><div className={'ready-dot '+(ready?'on':'')}></div><div><b>Readiness: {status.readiness?.status||'CHECKING'}</b><p className="muted">Full mode requires fresh NSE feed data, source-backed global intelligence, a clear kill switch and a healthy audit ledger.</p></div></div>
+        <div className="autonomy-form"><label>India paper daily loss limit (₹)<input type="number" min="1" step="1" value={lossLimit} onChange={e=>setLossLimit(e.target.value)} placeholder="Required for full mode"/></label><button onClick={()=>changeMode('full')} disabled={isPending('mode')||!isBotOn||isKillActive||!ready||!lossLimit||Number(lossLimit)<=0}>Apply full-autonomy limit</button></div>
+        <div className="readiness"><div className={'ready-dot '+(ready?'on':'')}></div><div><b>Readiness: {status.readiness?.status||'CHECKING'}</b><p className="muted">Full mode requires a fresh NSE or configured global-market quote, source-backed intelligence, a clear kill switch and a healthy audit ledger.</p></div></div>
         <div className="checks">{Object.entries(status.readiness?.checks||{}).map(([k,v])=><span className={'check '+(v?'ok':'pending')} key={k}>{v?'✓':'○'} {k.replaceAll('_',' ')}</span>)}</div>
         <div className="control-row lock-row"><div><b>Daily loss lock: {status.daily_loss_lock?'ACTIVE':'Clear'}</b><p className="muted small">Resetting the daily lock preserves P&amp;L and never re-enables autonomy or releases the kill switch.</p></div><button className="secondary" onClick={resetDailyLock} disabled={!status.daily_loss_lock||isPending('daily-lock')}>Reset daily loss lock</button></div>
         <p className="muted small">Autonomous rule signals and paper exits run only from configured NSE cash-equity feed instruments. Live order routing remains locked pending broker and safety validation.</p>
@@ -195,6 +198,28 @@ export default function App(){
         {!!paperEngine.stale_open_positions?.length&&<p className="error">Open paper positions are not receiving fresh exit quotes: {paperEngine.stale_open_positions.join(', ')}. The simulator will not fabricate an exit price.</p>}
         {!paperEngine.eligible_equity_instruments&&<p className="error">Current default subscriptions are Nifty indices. Add NSE_EQ stock instrument keys to UPSTOX_INSTRUMENT_KEYS in backend/.env and restart FastAPI. Index quotes cannot be submitted as stock orders.</p>}
         <p className="muted small">Signal scores are rule-strength labels, not win probabilities. This paper simulator does not model fees, taxes, slippage, exchange holidays, or broker fills.</p>
+      </section>
+      <section className="panel">
+        {(()=>{const gf=status.global_market_feed||{}, ge=status.global_paper_engine||{}, ga=ge.account||{};return <>
+          <div className="panel-title"><Globe/> Global markets paper engine <span className={'pill '+(gf.connected?'green':'amber')}>{gf.status||'NOT CONFIGURED'}</span><button className="secondary" onClick={connectGlobalFeed} disabled={isPending('global-feed')||gf.status==='CONNECTING'}>Connect Twelve Data</button></div>
+          <p className="muted">Twelve Data quote feed · US equities trade regular NYSE/Nasdaq hours; FX and spot commodity pairs use a conservative 24/5 session approximation. Instruments and venue holidays vary. All orders stay in Trabot’s local paper simulator; live routing is disabled.</p>
+          {gf.error&&<p className="error">{gf.error}</p>}
+          <div className="kv"><span>Paper engine</span><b>{ge.status||'STARTING'} · USD paper only</b></div>
+          <div className="kv"><span>Global full-autonomy permission</span><b>{ge.autonomous_enabled?'ON · USD risk controls active':'OFF · suggestions only'}</b></div>
+          <div className="kv"><span>Configured instruments</span><b>{(gf.symbols||[]).map(x=>x.symbol).join(', ')||'None'}</b></div>
+          <div className="kv"><span>Strategy warm-up</span><b>{ge.warmup_bars||30} completed 1m bars per instrument</b></div>
+          <div className="kv"><span>USD paper balance</span><b>${Number(ga.starting_capital||0).toLocaleString('en-US')}</b></div>
+          <div className="kv"><span>USD daily P&amp;L · realised + open</span><b>${Number(ga.daily_pnl||0).toFixed(2)}</b></div>
+          <div className="kv"><span>Open USD positions / orders today</span><b>{ga.open_positions??0} / {ga.orders_today??0}</b></div>
+          <div className="kv"><span>USD risk per trade / daily loss lock</span><b>${Number(ga.max_risk_per_trade||0).toFixed(2)} / ${Number(ga.daily_loss_limit||0).toFixed(2)} · {ga.daily_loss_lock?'LOCKED':'Clear'}</b></div>
+          {ga.daily_loss_lock&&<div className="control-row"><span className="muted small">Resetting the USD lock preserves P&amp;L and does not change the agent mode.</span><button className="secondary" onClick={resetGlobalDailyLock} disabled={isPending('global-daily-lock')}>Reset USD daily loss lock</button></div>}
+          <div className="kv"><span>Strategies</span><b>{(ge.strategies||[]).join(' · ')}</b></div>
+          <p className="muted">{ge.last_action||'Waiting for Twelve Data quotes.'}</p>
+          {ge.error&&<p className="error">Global paper engine: {ge.error}</p>}
+          {!!ga.stale_open_positions?.length&&<p className="error">Exit monitoring is waiting for fresh quotes on: {ga.stale_open_positions.join(', ')}. The simulator will not fabricate an exit price.</p>}
+          {!gf.configured&&<p className="muted small">Set TWELVE_DATA_API_KEY and opt-in symbols in backend/.env (TWELVE_DATA_US_EQUITIES, TWELVE_DATA_FOREX, TWELVE_DATA_COMMODITIES), then restart FastAPI. Streaming and real-time commodity access are plan- and symbol-dependent; trial plans may limit subscriptions. The scanner needs 30 completed real-time one-minute bars before it can suggest a setup.</p>}
+          <p className="muted small">FX is generally open 24 hours a day, five days a week, not 24/7. Many commodity markets have daily maintenance breaks and holiday closures; this first paper version requires fresh provider quotes and uses a broad 24/5 window for configured FX/spot-commodity pairs. No future or overnight quote is synthesized.</p>
+        </>})()}
       </section>
       <section className="grid">
         <div className="panel"><div className="panel-title"><RadioTower/> NSE market feed <button onClick={connectFeed} disabled={isPending('feed')}>Connect feed</button></div><p className="muted">Upstox V3 &middot; Feed status: {status.feed_status||'CHECKING'} &middot; {status.feed_instrument_count||0} instrument keys.</p>{status.feed_error&&<p className="error">{status.feed_error}</p>}{!status.feed_token_configured&&<p className="muted">To connect: complete Upstox OAuth, place the current token in backend/.env as UPSTOX_ACCESS_TOKEN, then restart FastAPI. Set subscriptions with UPSTOX_INSTRUMENT_KEYS. The feed starts automatically once both are configured.</p>}
@@ -237,6 +262,7 @@ export default function App(){
         <div className="filter-bar report-filters">
           <label className="filter-field">Window<select value={reportWindow} onChange={e=>setReportWindow(e.target.value)}><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option></select></label>
           <FilterSelect label="Market" value={reportRegion} onChange={setReportRegion} options={['India','US','Global']}/>
+          <FilterSelect label="Currency" value={reportCurrency} onChange={setReportCurrency} options={['INR','USD']}/>
           <FilterSelect label="Asset class" value={reportAsset} onChange={setReportAsset} options={['equity','commodity','currency']}/>
           <FilterInput label="Symbol" value={reportSymbol} onChange={setReportSymbol}/>
           <label className="filter-field">From<input type="date" value={reportFrom} onChange={e=>setReportFrom(e.target.value)}/></label>
@@ -245,11 +271,11 @@ export default function App(){
         <div className="stats report-stats">
           <Metric title="Closed trades" value={reportTrades.length}/>
           <Metric title="Win rate · sample only" value={reportTrades.length?`${((winCount/reportTrades.length)*100).toFixed(1)}%`:'—'}/>
-          <Metric title="Paper P&L before costs" value={`₹${reportPnl.toLocaleString('en-IN',{maximumFractionDigits:2})}`}/>
+          <Metric title={`Paper P&L before costs (${reportCurrency})`} value={`${reportCurrency==='USD'?'$':'₹'}${reportPnl.toLocaleString(reportCurrency==='USD'?'en-US':'en-IN',{maximumFractionDigits:2})}`}/>
           <Metric title="Wins / losses" value={`${winCount} / ${lossCount}`}/>
         </div>
         <div className="report-grid">
-          <div className="chart-card"><h3>Daily paper P&amp;L before costs</h3>{reportByDay.length?<ResponsiveContainer width="100%" height={280}><BarChart data={reportByDay}><CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/><XAxis dataKey="date" tick={{fill:'var(--muted)',fontSize:11}}/><YAxis tick={{fill:'var(--muted)',fontSize:11}}/><Tooltip contentStyle={{background:'var(--surface)',borderColor:'var(--border)',color:'var(--text)'}}/><Legend/><Bar dataKey="pnl" name="Paper P&L (₹)" fill="var(--chart-accent)" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>:<div className="chart-empty">Close paper trades to build the daily P&amp;L chart.</div>}</div>
+          <div className="chart-card"><h3>Daily paper P&amp;L before costs ({reportCurrency})</h3>{reportByDay.length?<ResponsiveContainer width="100%" height={280}><BarChart data={reportByDay}><CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/><XAxis dataKey="date" tick={{fill:'var(--muted)',fontSize:11}}/><YAxis tick={{fill:'var(--muted)',fontSize:11}}/><Tooltip contentStyle={{background:'var(--surface)',borderColor:'var(--border)',color:'var(--text)'}}/><Legend/><Bar dataKey="pnl" name={`Paper P&L (${reportCurrency})`} fill="var(--chart-accent)" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>:<div className="chart-empty">Close paper trades to build the daily P&amp;L chart.</div>}</div>
           <div className="chart-card"><h3>Trade outcomes</h3>{outcomes.length?<ResponsiveContainer width="100%" height={280}><PieChart><Pie data={outcomes} dataKey="value" nameKey="name" innerRadius={58} outerRadius={92} paddingAngle={3} label>{outcomes.map(entry=><Cell key={entry.name} fill={entry.color}/>)}</Pie><Tooltip contentStyle={{background:'var(--surface)',borderColor:'var(--border)',color:'var(--text)'}}/><Legend/></PieChart></ResponsiveContainer>:<div className="chart-empty">No closed trades in this window.</div>}</div>
         </div>
       </section>
@@ -260,7 +286,7 @@ export default function App(){
       <p className="muted small">Trade and paper-order records currently held in this runtime session.</p>
       <p className="muted small">Use the filters to separate Indian and US equities, commodities, and currency/FX records. Exchange and market classification is stored with each new record.</p>
       <div className="filter-bar"><FilterInput label="Symbol" value={tradeFilters.symbol} onChange={v=>setTradeFilters({...tradeFilters,symbol:v})}/><FilterSelect label="Market" value={tradeFilters.market_region} onChange={v=>setTradeFilters({...tradeFilters,market_region:v})} options={['India','US','Global']}/><FilterSelect label="Category" value={tradeFilters.asset_class} onChange={v=>setTradeFilters({...tradeFilters,asset_class:v})} options={['equity','commodity','currency']}/><FilterInput label="Exchange" value={tradeFilters.exchange} onChange={v=>setTradeFilters({...tradeFilters,exchange:v})}/><FilterSelect label="Status" value={tradeFilters.status} onChange={v=>setTradeFilters({...tradeFilters,status:v})} options={['OPEN','CLOSED','SUBMITTED_TO_UPSTOX_SANDBOX']}/><FilterSelect label="Side" value={tradeFilters.side} onChange={v=>setTradeFilters({...tradeFilters,side:v})} options={['BUY','SELL']}/><label className="filter-field">From<input type="date" value={tradeFilters.date_from} onChange={e=>setTradeFilters({...tradeFilters,date_from:e.target.value})}/></label><label className="filter-field">To<input type="date" value={tradeFilters.date_to} onChange={e=>setTradeFilters({...tradeFilters,date_to:e.target.value})}/></label><button className="secondary" onClick={refresh}><RefreshCw size={14}/>Refresh</button></div>
-      <table><thead><tr><th>Signal</th><th>Market</th><th>Category</th><th>Exchange</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Stop</th><th>Target</th><th>Qty</th><th>Status</th><th>Mode</th></tr></thead><tbody>{filteredTrades.length?filteredTrades.map((o,i)=><tr key={o.signal_id||i}><td>{o.signal_id}</td><td>{o.market_region||'India'}</td><td>{o.asset_class||'equity'}</td><td>{o.exchange||'—'}</td><td>{o.symbol}</td><td>{o.side}</td><td>{o.entry}</td><td>{o.stop_loss}</td><td>{o.target}</td><td>{o.quantity}</td><td>{o.status}</td><td>{o.mode}</td></tr>):<tr><td colSpan="12">No trades match these filters.</td></tr>}</tbody></table>
+      <table><thead><tr><th>Signal</th><th>Market</th><th>Category</th><th>Exchange</th><th>Symbol</th><th>Currency</th><th>Side</th><th>Entry</th><th>Stop</th><th>Target</th><th>Qty</th><th>Status</th><th>Mode</th></tr></thead><tbody>{filteredTrades.length?filteredTrades.map((o,i)=><tr key={o.signal_id||i}><td>{o.signal_id}</td><td>{o.market_region||'India'}</td><td>{o.asset_class||'equity'}</td><td>{o.exchange||'—'}</td><td>{o.symbol}</td><td>{o.currency||'INR'}</td><td>{o.side}</td><td>{o.entry}</td><td>{o.stop_loss}</td><td>{o.target}</td><td>{o.quantity}</td><td>{o.status}</td><td>{o.mode}</td></tr>):<tr><td colSpan="13">No trades match these filters.</td></tr>}</tbody></table>
     </section>}
 
     {tab==='suggestions'&&<section className="panel">

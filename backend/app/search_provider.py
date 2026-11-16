@@ -38,9 +38,11 @@ def search_searxng(
     search_client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=False)
     sources: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    usable_by_query: list[int] = []
 
     try:
         for query in normalized_queries:
+            usable_before_query = len(sources)
             try:
                 response = search_client.get(
                     f"{base_url}/search",
@@ -82,9 +84,15 @@ def search_searxng(
                     "query": query,
                     "kind": "searxng_search_result",
                 })
+            usable_by_query.append(len(sources) - usable_before_query)
 
         if not sources:
-            raise SearchProviderError("SearXNG returned no usable source results for the research queries.")
+            counts = ", ".join(str(count) for count in usable_by_query)
+            raise SearchProviderError(
+                f"SearXNG returned no usable source URLs across {len(normalized_queries)} searches "
+                f"(usable results per search: {counts}). Check SearXNG engines, connectivity, "
+                "and that /search?format=json returns result URLs."
+            )
         return sources[:max(1, min(max_queries * limit_per_query, 50))]
     finally:
         if owns_client:

@@ -53,6 +53,17 @@ def test_searxng_403_explains_json_format_setting():
         client.close()
 
 
+def test_searxng_no_results_reports_per_search_usable_url_counts():
+    client = httpx.Client(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"results": []})
+    ))
+    try:
+        with pytest.raises(SearchProviderError, match=r"2 searches \(usable results per search: 0, 0\)"):
+            search_searxng(["macro update", "India market update"], base_url="http://localhost:8888", client=client)
+    finally:
+        client.close()
+
+
 def test_research_passes_searxng_evidence_to_nvidia_and_returns_sources(tmp_path, monkeypatch):
     import app.audit as audit
 

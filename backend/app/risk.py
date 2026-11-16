@@ -5,14 +5,14 @@ from .config import MAX_OPEN_POSITIONS
 def calculate_unrealised_pnl(orders, ticks):
     total = 0.0
     for order in orders:
-        if order.get("status") != "OPEN":
+        if order.get("status") != "OPEN" or order.get("currency", "INR") != "INR":
             continue
         tick = ticks.get(order.get("instrument_token"))
         if not tick:
             continue
         ltp = float(tick["ltp"])
         direction = 1 if order["side"] == "BUY" else -1
-        total += (ltp - float(order["entry"])) * int(order["quantity"]) * direction
+        total += (ltp - float(order.get("actual_entry", order["entry"]))) * int(order["quantity"]) * direction
     return total
 
 def current_daily_pnl(state):
@@ -26,12 +26,13 @@ def validate(signal, approval, ticks, orders, daily_pnl):
         raise ValueError("Strategy approval expired.")
     if signal.symbol.upper() not in [s.upper() for s in approval["symbols"]]:
         raise ValueError("Symbol not included in approved universe.")
-    if len([o for o in orders if o["status"] == "OPEN"]) >= MAX_OPEN_POSITIONS:
+    if len([o for o in orders if o["status"] == "OPEN" and o.get("currency", "INR") == "INR"]) >= MAX_OPEN_POSITIONS:
         raise ValueError("Maximum open positions reached.")
     today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     todays_orders = [
         o for o in orders
-        if datetime.fromisoformat(o["created_at"]).astimezone(ZoneInfo("Asia/Kolkata")).date() == today
+        if o.get("currency", "INR") == "INR"
+        and datetime.fromisoformat(o["created_at"]).astimezone(ZoneInfo("Asia/Kolkata")).date() == today
     ]
     if len(todays_orders) >= approval["max_trades"]:
         raise ValueError("Approved daily trade count reached.")

@@ -7,6 +7,14 @@
 
 # v2.0 Review Report
 
+## Unreleased — Twelve Data global paper-market integration
+
+- Added an optional Twelve Data streaming adapter and a separate global paper worker for explicitly configured US equities, FX pairs, and spot-commodity symbols. USD risk/P&L is segregated from INR calculations; global orders remain local paper records.
+- Safety checks: fresh provider timestamps, regular New York equity hours, approximate FX/commodity weekday sessions, 30 observed one-minute bars, per-trade/notional caps, one open USD position, daily USD loss lock and trade cap, shared kill/order lock, audit fail-closed behavior, and no live order path.
+- Regression coverage: seven new tests exercise US/FX/commodity session boundaries, real-tick normalization, New York bar-day reset, USD/INR ledger isolation, USD loss-lock revocation, and autonomy rollover. Focused validation passed 16 backend tests; `compileall` passed; Vite production build passed with existing large-chunk and `use client` warnings.
+- No Twelve Data API key was used, so provider authentication, symbol entitlement, real WebSocket operation, and live exchange schedule behavior remain untested. No independent human/agent peer review was performed in this turn; this report is the implementation's own review and must not be treated as independent approval.
+- Remaining limitations: this engine applies price-only rules, not the AI research brief; symbols, data-plan access, and quote rights depend on Twelve Data; FX is approximated as 24/5 and configured spot commodities inherit that approximation despite contract/provider-specific breaks; no venue holiday calendar, spread/fees/slippage/financing model, historical warm-up, durable positions, or restart recovery exists. This is not evidence of profitability and must not be used for live trading.
+
 ## Unreleased dashboard and startup controls
 - Added regression coverage that startup and day rollover leave the kill switch released while the bot remains stopped.
 - Added exact `I AGREE` phrase validation; a test confirms live order submission still returns HTTP 501 even when configured activation flags and acknowledgement are supplied.
