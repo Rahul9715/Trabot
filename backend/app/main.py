@@ -212,8 +212,8 @@ def status():
 @app.post("/api/execution-mode")
 def set_execution_mode(c: ExecutionModeControl):
     if c.mode == "LIVE":
-        if c.confirmation != "I AGREEE":
-            raise HTTPException(400, "Type I AGREEE exactly to confirm the LIVE mode selection.")
+        if c.confirmation != "I AGREE":
+            raise HTTPException(400, "Type I AGREE exactly to confirm the LIVE mode selection.")
         state.execution_mode = "LIVE_SELECTED"
         record_event("LIVE_MODE_SELECTED", {"confirmation_phrase_received": True, "live_orders_enabled": False})
         return {"execution_mode": state.execution_mode, "live_orders_enabled": False,
@@ -866,4 +866,5 @@ async def live_order(s: Signal, ack: str):
     if not LIVE_TRADING_ENABLED or LIVE_TRADING_ACK != ack or UPSTOX_MODE != "live":
         raise HTTPException(403,"Live execution disabled. Complete broker onboarding, compliance and explicit local activation.")
     raise HTTPException(501,"Live order execution remains deliberately unimplemented in this development build.")
+
 

@@ -5,6 +5,48 @@ from threading import Event
 from fastapi.testclient import TestClient
 import app.audit as audit
 import app.main as main
+from app.state import RuntimeState
+
+
+def test_kill_switch_defaults_released_and_stays_released_after_daily_rollover():
+    runtime = RuntimeState()
+    assert runtime.kill_switch is False
+    runtime.daily_date = "2000-01-01"
+    runtime.kill_switch = False
+    runtime.reset_daily_counters_if_needed()
+    assert runtime.kill_switch is False
+    assert runtime.bot_enabled is False
+
+
+def test_live_mode_acknowledgement_requires_exact_i_agree(tmp_path, monkeypatch):
+    monkeypatch.setattr(audit, "DB_PATH", tmp_path / "live-mode-audit.db")
+    audit.init_audit()
+    client = TestClient(main.app)
+    main.state.execution_mode = "PAPER"
+    rejected = client.post("/api/execution-mode", json={"mode": "LIVE", "confirmation": "I AGREEE"})
+    assert rejected.status_code == 400
+    assert main.state.execution_mode == "PAPER"
+    selected = client.post("/api/execution-mode", json={"mode": "LIVE", "confirmation": "I AGREE"})
+    assert selected.status_code == 200
+    assert selected.json()["execution_mode"] == "LIVE_SELECTED"
+    assert selected.json()["live_orders_enabled"] is False
+
+
+def test_live_order_route_remains_fail_closed_after_live_mode_selection(tmp_path, monkeypatch):
+    monkeypatch.setattr(audit, "DB_PATH", tmp_path / "live-order-audit.db")
+    audit.init_audit()
+    monkeypatch.setattr(main, "LIVE_TRADING_ENABLED", True)
+    monkeypatch.setattr(main, "LIVE_TRADING_ACK", "I AGREE")
+    monkeypatch.setattr(main, "UPSTOX_MODE", "live")
+    client = TestClient(main.app)
+    payload = {
+        "signal_id": "live-signal-0001", "symbol": "RELIANCE",
+        "instrument_token": "NSE_EQ|INE002A01018", "side": "BUY",
+        "entry": 1000, "stop_loss": 980, "target": 1060, "quantity": 1,
+    }
+    response = client.post("/api/orders/live?ack=I%20AGREE", json=payload)
+    assert response.status_code == 501
+    assert "unimplemented" in response.json()["detail"].lower()
 
 
 def test_candidate_decision_is_audited(tmp_path, monkeypatch):
@@ -162,3 +204,4 @@ def test_successful_manual_refresh_clears_stale_worker_error(tmp_path, monkeypat
         response = client.post("/api/intelligence/refresh", json={"extra_context": ""})
     assert response.status_code == 200
     assert main.state.intelligence_worker_error is None
+

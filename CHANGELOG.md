@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Reports, themes and startup safety
+- Start with the emergency kill switch released (OFF), while leaving the master bot stopped; daily rollover keeps the switch released.
+- Add separate Global Intelligence and Reports tabs, with closed-trade daily P&L charts, win/loss breakdowns and period, date, market, asset and symbol filters.
+- Add a grayscale dark theme and an optional high-contrast dark theme.
+- Change the explicit LIVE mode acknowledgement phrase to `I AGREE`; make clear that it records a mode selection only. Live order routing stays OFF and locked.
+- No autonomous scanner, durable report history, or validated/profitable strategy is added.
+
 ## 2.4.0 - Responsive controls and startup-managed services
 - Replaced the page-wide pending flag with independent action states so research does not disable navigation, routine controls, or the emergency kill switch.
 - Added a FastAPI lifespan worker for immediate and periodic global-intelligence refresh, plus automatic Upstox feed startup when credentials and subscriptions are configured.
@@ -48,3 +55,4 @@
 - Added structured web-search source links, generation timestamps and audit metadata to research responses.
 - Global intelligence readiness now requires at least one structured source reference.
 - Research outputs remain advisory; this change does not add global market data feeds or live broker execution.
+

@@ -15,6 +15,8 @@
 - Autonomous scanner/scheduler, portfolio optimiser, continuous position monitor, broker fill reconciliation and production-grade recovery are incomplete.
 - Do not connect a funded account or enable live trading with this release.
 - Never put credentials, OAuth tokens, passwords or client secrets in source control, screenshots or chat.
+- The emergency kill switch starts released (OFF), while the master agent still starts stopped. Starting the application never starts trading.
+- The dashboard includes performance charts based on closed trades currently held in memory. They are not a durable brokerage statement or a validated strategy-performance record.
 
 ## Background services and responsiveness
 
@@ -30,7 +32,7 @@ The backend supports adapters for OpenAI, Anthropic Claude, Google Gemini, NVIDI
 
 ## Source baseline
 
-The v2.4.0 development release includes provider adapters, optional SearXNG research search, market/asset classification, region/category filters, a visible paper/live selector with live locked, candidate expiry, daily-sheet Excel export, dedicated dashboard tabs, and persistent agent/kill controls.
+The unreleased dashboard changes add a separate Intelligence tab, daily/weekly/monthly performance charts and outcome breakdowns, symbol/market/asset/date filters, and grayscale dark plus high-contrast dark themes. Live order routing remains locked. Full autonomy still has no scanner or strategy scheduler and cannot generate trades by itself.
 
 ## Local setup
 
@@ -71,6 +73,7 @@ See `SETUP_GUIDE.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `REVIEW_REPORT.md`, `CO
 Durable event-sourced recovery, autonomous NSE scan and strategy scheduling, statistically calibrated confidence, portfolio allocation, genuinely independent review, complete broker order/fill lifecycle, asynchronous evidence archival, UI end-to-end testing, authentication/security hardening, and compliance review remain outstanding.
 
 A passing health/readiness check is not proof of production readiness and is not a trade signal.
+
 
 
 

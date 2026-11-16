@@ -56,3 +56,12 @@ See `SETUP_GUIDE.md` for Upstox and provider setup.
 - Upstox feed auto-connects at startup when `UPSTOX_ACCESS_TOKEN` and `UPSTOX_INSTRUMENT_KEYS` are set. Without them, FastAPI stays available and status reports configuration required. The token must be renewed according to Upstox expiry.
 - The browser keeps research, intelligence, feed, bot, and kill-switch actions independent. The API handles synchronous research in FastAPI worker threads and the periodic worker uses a background thread for provider I/O.
 - SearXNG is a separate Docker service; this change does not start Docker or Vite from inside the FastAPI process.
+
+## Unreleased dashboard and startup controls
+
+- The emergency kill switch initializes released (OFF); the master agent remains stopped until explicitly started. Daily rollover also leaves the switch released.
+- The dashboard separates Global Intelligence from Overview and adds report charts based on closed paper trades from the current in-memory runtime. Reports are filtered by period, symbol, region, asset class and date range; this is not durable trade history.
+- Dark mode uses grayscale surfaces; Contrast adds stronger accent and border colors. Light mode remains available.
+- The UI requires the exact phrase `I AGREE` to record a LIVE mode selection. The separate Live trading switch remains visibly OFF and locked because live order routing and lifecycle reconciliation are not implemented or reviewed.
+- Full autonomy remains a permission flag only. There is no scanner, candidate scheduler or validated strategy in this release.
+

@@ -1,8 +1,10 @@
 import React, {useEffect, useState} from 'react';
 import {Activity, ShieldCheck, RadioTower, BrainCircuit, Power, RefreshCw, AlertTriangle, Bot, Globe, LockKeyhole, FileSpreadsheet, ListFilter, LayoutDashboard} from 'lucide-react';
+import {Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
 
 const API='http://127.0.0.1:8000';
-const TABS=[['overview','Overview'],['trades','Trades'],['suggestions','Suggested trades'],['audit','Audit ledger']];
+const TABS=[['overview','Overview'],['trades','Trades'],['suggestions','Suggested trades'],['reports','Reports'],['intelligence','Intelligence'],['audit','Audit ledger']];
+const MARKET_DATE_FORMATTER=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata'});
 
 export default function App(){
   const [tab,setTab]=useState('overview');
@@ -29,6 +31,12 @@ export default function App(){
   const [liveConfirmation,setLiveConfirmation]=useState('');
   const [audit,setAudit]=useState([]);
   const [theme,setTheme]=useState(()=>localStorage.getItem('nse-theme')||'dark');
+  const [reportWindow,setReportWindow]=useState('month');
+  const [reportRegion,setReportRegion]=useState('');
+  const [reportAsset,setReportAsset]=useState('');
+  const [reportSymbol,setReportSymbol]=useState('');
+  const [reportFrom,setReportFrom]=useState('');
+  const [reportTo,setReportTo]=useState('');
   const [tradeFilters,setTradeFilters]=useState({symbol:'',status:'',side:'',asset_class:'',market_region:'',exchange:'',date_from:'',date_to:''});
   const [candidateFilters,setCandidateFilters]=useState({symbol:'',status:'',side:'',confidence:'',asset_class:'',market_region:'',exchange:'',date_from:'',date_to:''});
   const [auditFilters,setAuditFilters]=useState({q:'',event_type:'',asset_class:'',market_region:'',date_from:'',date_to:''});
@@ -102,6 +110,24 @@ export default function App(){
   const isBotOn=!!status.bot_enabled;
   const isKillActive=!!status.kill_switch;
   const mode=status.operating_mode==='FULL'?'full':'semi';
+  const reportNow=new Date();
+  const reportStart=new Date(reportNow);
+  if(reportWindow==='day') reportStart.setHours(0,0,0,0);
+  else if(reportWindow==='week'){reportStart.setDate(reportStart.getDate()-((reportStart.getDay()+6)%7));reportStart.setHours(0,0,0,0)}
+  else {reportStart.setDate(1);reportStart.setHours(0,0,0,0)}
+  if(reportFrom) reportStart.setTime(new Date(`${reportFrom}T00:00:00`).getTime());
+  const reportEnd=reportTo?new Date(`${reportTo}T23:59:59.999`):reportNow;
+  const reportTrades=orders.filter(o=>{
+    if(o.status!=='CLOSED'||typeof o.realised_pnl!=='number')return false;
+    const closedAt=new Date(o.closed_at||o.created_at);
+    return closedAt>=reportStart&&closedAt<=reportEnd&&(!reportRegion||String(o.market_region||'India')===reportRegion)&&(!reportAsset||String(o.asset_class||'equity')===reportAsset)&&(!reportSymbol||String(o.symbol||'').toLowerCase().includes(reportSymbol.toLowerCase()));
+  });
+  const winCount=reportTrades.filter(o=>o.realised_pnl>0).length;
+  const lossCount=reportTrades.filter(o=>o.realised_pnl<0).length;
+  const evenCount=reportTrades.length-winCount-lossCount;
+  const reportPnl=reportTrades.reduce((sum,o)=>sum+o.realised_pnl,0);
+  const reportByDay=Object.values(reportTrades.reduce((acc,o)=>{const d=MARKET_DATE_FORMATTER.format(new Date(o.closed_at||o.created_at));if(!d)return acc;acc[d]??={date:d,pnl:0,trades:0};acc[d].pnl+=o.realised_pnl;acc[d].trades++;return acc;},{})).sort((a,b)=>a.date.localeCompare(b.date));
+  const outcomes=[{name:'Wins',value:winCount,color:'#2dd4a3'},{name:'Losses',value:lossCount,color:'#fb7185'},{name:'Breakeven',value:evenCount,color:'#9ca3af'}].filter(x=>x.value);
 
   return <div className="shell">
     <div className="sticky-shell">
@@ -118,10 +144,10 @@ export default function App(){
         <div className="execution-switch" aria-label="Trading execution mode">
           <span className="small muted">Execution</span>
           <button className="exec-active" onClick={selectPaperMode} disabled={isPending('execution')||status.execution_mode==='PAPER'}>Paper money</button>
-          <button className={status.execution_mode==='LIVE_SELECTED'?'exec-live-selected':'exec-live'} onClick={()=>{setLiveConfirmation('');setShowLiveConfirm(true)}} disabled={isPending('execution')}>{status.execution_mode==='LIVE_SELECTED'?'Live selected':'Real money'}</button>
+          <button className={status.execution_mode==='LIVE_SELECTED'?'exec-live-selected':'exec-live'} onClick={()=>{setLiveConfirmation('');setShowLiveConfirm(true)}} disabled={isPending('execution')}>{status.execution_mode==='LIVE_SELECTED'?'Live mode · routing OFF':'Real money · routing OFF'}</button>
         </div>
         <div className="header-right">
-          <button className="secondary" onClick={()=>setTheme(theme==='dark'?'light':'dark')}>{theme==='dark'?'☀ Light':'☾ Dark'}</button>
+          <button className="secondary" onClick={()=>setTheme(theme==='dark'?'contrast':theme==='contrast'?'light':'dark')}>{theme==='dark'?'◐ Contrast':theme==='contrast'?'☀ Light':'● Dark'}</button>
           <span className={'pill '+(isKillActive?'red-pill':ready?'green':'amber')}>{isKillActive?'KILL SWITCH ACTIVE':ready?'READY':isBotOn?'CHECKS PENDING':'AGENT STOPPED'}</span>
         </div>
       </header>
@@ -131,7 +157,7 @@ export default function App(){
     </div>
     {error&&<div className="error"><AlertTriangle size={16}/>{error}</div>}
     {notice&&<div className="notice">{notice}</div>}
-    {showLiveConfirm&&<div className="modal-backdrop" style={{position:'fixed',inset:0,zIndex:50,background:'#030712c9',display:'grid',placeItems:'center',padding:18}}><section className="panel confirm-modal" style={{width:'min(560px, 100%)',boxShadow:'0 25px 80px #0008'}} role="dialog" aria-modal="true" aria-labelledby="live-confirm-title"><h2 id="live-confirm-title">Confirm LIVE mode selection</h2><p className="muted">Type <b>I AGREEE</b> to record that you intend to select live market mode. This does not enable real-money orders: live broker routing and reconciliation are not implemented in this release. Selecting LIVE blocks paper and sandbox order submission until you switch back.</p><input style={{width:'100%',margin:'10px 0 16px',padding:12}} aria-label="Confirmation phrase" value={liveConfirmation} onChange={e=>setLiveConfirmation(e.target.value)} placeholder="Type I AGREEE exactly"/><div className="actions" style={{justifyContent:'flex-end'}}><button className="danger" onClick={selectLiveMode} disabled={isPending('execution')||liveConfirmation!=='I AGREEE'}>Confirm LIVE selection</button><button className="secondary" onClick={()=>setShowLiveConfirm(false)}>Cancel</button></div></section></div>}
+    {showLiveConfirm&&<div className="modal-backdrop" style={{position:'fixed',inset:0,zIndex:50,background:'#030712c9',display:'grid',placeItems:'center',padding:18}}><section className="panel confirm-modal" style={{width:'min(560px, 100%)',boxShadow:'0 25px 80px #0008'}} role="dialog" aria-modal="true" aria-labelledby="live-confirm-title"><h2 id="live-confirm-title">Live trading is locked in this build</h2><p className="muted">Type <b>I AGREE</b> to record a LIVE mode selection. This confirmation does not enable live orders. Broker order-state tracking, fill reconciliation, restart recovery, and independent safety validation are still required. Selecting LIVE blocks paper and sandbox orders until you switch back.</p><input style={{width:'100%',margin:'10px 0 16px',padding:12}} aria-label="Confirmation phrase" value={liveConfirmation} onChange={e=>setLiveConfirmation(e.target.value)} placeholder="Type I AGREE exactly"/><div className="actions" style={{justifyContent:'flex-end'}}><button className="danger" onClick={selectLiveMode} disabled={isPending('execution')||liveConfirmation!=='I AGREE'}>Confirm LIVE mode selection</button><button className="secondary" onClick={()=>setShowLiveConfirm(false)}>Cancel</button></div></section></div>}
 
     {tab==='overview'&&<>
       <section className="stats">
@@ -163,10 +189,13 @@ export default function App(){
         </div>
         <div className="panel"><div className="panel-title"><ShieldCheck/> Safety & provider</div>
           <div className="kv"><span>Execution mode</span><b>{status.execution_mode==='LIVE_SELECTED'?'LIVE SELECTED · ROUTING OFF':'Paper money'}</b></div><div className="kv"><span>Live orders</span><b className="red">Unavailable in this build</b></div>
+          <div className="kv"><span>Live trading switch</span><button type="button" className="exec-locked" role="switch" aria-checked="false" disabled title="Live order routing is not implemented in this build">OFF · LOCKED</button></div>
           <div className="kv"><span>AI provider</span><b>{status.ai_provider||'Not configured'}</b></div><div className="kv"><span>Model</span><b>{status.ai_model||'Not configured'}</b></div>
           <div className="kv"><span>API key</span><b>{status.ai_configured?'Configured':'Missing'}</b></div><div className="kv"><span>Web search</span><b>{status.ai_web_search_enabled?'Requested':'Disabled'}</b></div>
         </div>
       </section>
+      </>}
+    {tab==='intelligence'&&<>
       <section className="panel research"><div className="panel-title"><Globe/> Global geopolitics & market intelligence <button onClick={refreshIntelligence} disabled={isPending('intelligence')||status.intelligence_status==='UPDATING'}>{status.intelligence_status==='UPDATING'?'Refreshing...':'Refresh intelligence'}</button></div>
         <p className="muted">The background worker refreshes the brief automatically every {status.intelligence_refresh_interval_minutes||30} minutes. Search provider: {status.research_search_provider||'native'}; worker status: {status.intelligence_worker_status||'STARTING'}. SearXNG runs as a separate Docker service; keep it running for external web evidence. The field below is optional and treated as an unverified lead.</p>{status.intelligence_worker_error&&<p className="error">Background research worker: {status.intelligence_worker_error}</p>}
         <textarea value={context} onChange={e=>setContext(e.target.value)} placeholder="Optional additional context, watchlist, or specific question…" rows="3"/>
@@ -185,6 +214,31 @@ export default function App(){
         <textarea value={analysisQuestion} onChange={e=>setAnalysisQuestion(e.target.value)} rows="2" placeholder="Research question…"/>
         <div className="control-row"><span className="muted small">Research is advisory only and never places an order.</span><button onClick={runResearch} disabled={isPending('research')||analysisQuestion.trim().length<5}>Run research</button></div>
         {analysis&&<><pre className="research-output">{analysis.research}</pre><div className="muted small">{analysis.provider} · {analysis.model} · {analysis.web_search_supported?'Search supported':'No search adapter'} · {analysis.generated_at}</div>{analysis.sources?.length>0&&<ul className="source-list">{analysis.sources.map(s=><li key={s.url}><a href={s.url} target="_blank" rel="noreferrer">{s.title}</a></li>)}</ul>}</>}
+      </section>
+    </>}
+
+    {tab==='reports'&&<>
+      <section className="panel">
+        <div className="panel-title"><Activity/> Performance reports</div>
+        <p className="muted small">Reports use closed trades and recorded net P&amp;L from this backend runtime. No trade history is persisted across restarts in this build; empty results mean there is no recorded sample, not zero risk.</p>
+        <div className="filter-bar report-filters">
+          <label className="filter-field">Window<select value={reportWindow} onChange={e=>setReportWindow(e.target.value)}><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option></select></label>
+          <FilterSelect label="Market" value={reportRegion} onChange={setReportRegion} options={['India','US','Global']}/>
+          <FilterSelect label="Asset class" value={reportAsset} onChange={setReportAsset} options={['equity','commodity','currency']}/>
+          <FilterInput label="Symbol" value={reportSymbol} onChange={setReportSymbol}/>
+          <label className="filter-field">From<input type="date" value={reportFrom} onChange={e=>setReportFrom(e.target.value)}/></label>
+          <label className="filter-field">To<input type="date" value={reportTo} onChange={e=>setReportTo(e.target.value)}/></label>
+        </div>
+        <div className="stats report-stats">
+          <Metric title="Closed trades" value={reportTrades.length}/>
+          <Metric title="Win rate · sample only" value={reportTrades.length?`${((winCount/reportTrades.length)*100).toFixed(1)}%`:'—'}/>
+          <Metric title="Net realized P&L" value={`₹${reportPnl.toLocaleString('en-IN',{maximumFractionDigits:2})}`}/>
+          <Metric title="Wins / losses" value={`${winCount} / ${lossCount}`}/>
+        </div>
+        <div className="report-grid">
+          <div className="chart-card"><h3>Daily net P&amp;L</h3>{reportByDay.length?<ResponsiveContainer width="100%" height={280}><BarChart data={reportByDay}><CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/><XAxis dataKey="date" tick={{fill:'var(--muted)',fontSize:11}}/><YAxis tick={{fill:'var(--muted)',fontSize:11}}/><Tooltip contentStyle={{background:'var(--surface)',borderColor:'var(--border)',color:'var(--text)'}}/><Legend/><Bar dataKey="pnl" name="Net P&L (₹)" fill="var(--chart-accent)" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>:<div className="chart-empty">Close paper trades to build the daily P&amp;L chart.</div>}</div>
+          <div className="chart-card"><h3>Trade outcomes</h3>{outcomes.length?<ResponsiveContainer width="100%" height={280}><PieChart><Pie data={outcomes} dataKey="value" nameKey="name" innerRadius={58} outerRadius={92} paddingAngle={3} label>{outcomes.map(entry=><Cell key={entry.name} fill={entry.color}/>)}</Pie><Tooltip contentStyle={{background:'var(--surface)',borderColor:'var(--border)',color:'var(--text)'}}/><Legend/></PieChart></ResponsiveContainer>:<div className="chart-empty">No closed trades in this window.</div>}</div>
+        </div>
       </section>
     </>}
 
@@ -211,10 +265,11 @@ export default function App(){
       <table><thead><tr><th>Seq</th><th>Time (UTC)</th><th>Event</th><th>Entity</th><th>Details</th><th>Hash</th></tr></thead><tbody>{filteredAudit.length?filteredAudit.map(e=><tr key={e.event_id}><td>{e.seq}</td><td>{e.occurred_at}</td><td>{e.event_type}</td><td>{e.entity_id||'—'}</td><td className="audit-detail">{JSON.stringify(e.payload||{})}</td><td>{e.event_hash?.slice(0,14)}…</td></tr>):<tr><td colSpan="6">No audit events match these filters.</td></tr>}</tbody></table>
     </section>}
 
-    <footer>Trabot 2.2.0 · Paper execution available · Live mode selection only · Development prototype</footer>
+    <footer>Trabot · Paper trading only · Live order routing locked · Development prototype</footer>
   </div>
 }
 
 function Metric({title,value}){return <div className="metric"><span>{title}</span><strong>{value}</strong></div>}
 function FilterInput({label,value,onChange}){return <label className="filter-field">{label}<input value={value} onChange={e=>onChange(e.target.value)} placeholder="All"/></label>}
 function FilterSelect({label,value,onChange,options}){return <label className="filter-field">{label}<select value={value} onChange={e=>onChange(e.target.value)}><option value="">All</option>{options.map(option=><option key={option} value={option}>{option}</option>)}</select></label>}
+

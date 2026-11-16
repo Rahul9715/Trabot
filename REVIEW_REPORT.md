@@ -1,5 +1,12 @@
 # v2.0 Review Report
 
+## Unreleased dashboard and startup controls
+- Added regression coverage that startup and day rollover leave the kill switch released while the bot remains stopped.
+- Added exact `I AGREE` phrase validation; a test confirms live order submission still returns HTTP 501 even when configured activation flags and acknowledgement are supplied.
+- Added report charts/filters and separate intelligence navigation. The report view uses only closed trades in the current runtime and does not claim durable or statistically validated performance.
+- Validation: 16 backend tests passed; Python compile succeeded; Vite production build succeeded. Vite reports the large-bundle warning and lucide module-directive warnings.
+- No independent human or external reviewer has reviewed this change. Live routing, strategy scheduling, performance, and funded-account operation remain unvalidated.
+
 ## Pass 1 — Functional/API
 - FastAPI app import succeeded; application reports version 2.0.0.
 - Python modules compile with `compileall`.
@@ -54,3 +61,4 @@ These three passes were performed by the same assistant in separate functional, 
 - Added currency/FX research scope and CORS support for both local Vite hostnames.
 - Classification is metadata only. US equities, commodities, FX and other global feeds, broker integrations, live order lifecycle, durable trade recovery, and production authentication remain unimplemented.
 - No automated tests or frontend build were run for these changes.
+

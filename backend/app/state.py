@@ -13,7 +13,8 @@ class RuntimeState:
         self.feed_status = "NOT_CONFIGURED"
         self.feed_error = None
         self.last_feed_at = None
-        self.kill_switch = True
+        # The emergency stop starts released; the bot itself remains stopped.
+        self.kill_switch = False
         self.bot_enabled = False
         self.bot_status = "STOPPED"
         self.autonomous_mode = False
@@ -45,7 +46,8 @@ class RuntimeState:
             self.daily_loss_lock = False
             self.daily_loss_baseline = 0.0
             self.approval = None
-            self.kill_switch = True
+            self.kill_switch = False
             self.operating_mode = "SEMI"
 
 state = RuntimeState()
+
