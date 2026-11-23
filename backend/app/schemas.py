@@ -1,18 +1,24 @@
 from pydantic import BaseModel, Field
 from typing import Literal
 
+AssetClass = Literal["equity", "options", "commodity", "currency"]
+MarketRegion = Literal["India", "US", "Global"]
+
 class Approval(BaseModel):
     session_id: str = Field(min_length=8, max_length=80)
     symbols: list[str]
-    max_risk_per_trade: float = Field(gt=0, le=50)
+    max_risk_per_trade: float = Field(gt=0, le=50000)
     max_daily_loss: float = Field(gt=0)
-    max_trades: int = Field(ge=1, le=2)
+    max_trades: int = Field(ge=1, le=100)
     expires_at: str
 
 class Signal(BaseModel):
     signal_id: str = Field(min_length=8, max_length=80)
     symbol: str
     instrument_token: str
+    asset_class: AssetClass = "equity"
+    market_region: MarketRegion = "India"
+    exchange: str = Field(default="", max_length=40)
     side: Literal["BUY", "SELL"]
     entry: float = Field(gt=0)
     stop_loss: float = Field(gt=0)
@@ -26,18 +32,38 @@ class Signal(BaseModel):
     evidence: dict = Field(default_factory=dict)
 
 class ResearchRequest(BaseModel):
-    market_context: str = Field(min_length=20, max_length=15000)
-    question: str = "Identify market regime, risks, sectors to watch and conditional trade setups. Do not invent prices or claim certainty."
+    market_context: str = Field(default="", max_length=15000)
+    question: str = Field(
+        default="Assess the current evidence, market regime, key risks and conditional scenarios.",
+        min_length=5,
+        max_length=2000,
+    )
+    asset_class: Literal["equities", "commodities", "currencies", "both"] = "both"
+    region: str = Field(default="global", min_length=2, max_length=80)
+    instruments: list[str] = Field(default_factory=list, max_length=100)
+    horizon: Literal["intraday", "swing", "position"] = "swing"
 
 
 class CandidateDecision(BaseModel):
     decision: Literal["APPROVED", "REJECTED", "WATCHLIST"]
     reason: str = Field(default="", max_length=4000)
 
+class PaperTradeLimits(BaseModel):
+    max_open_positions: int = Field(ge=1, le=50)
+    max_trades_per_day: int = Field(ge=1, le=100)
+    max_risk_per_trade: float | None = Field(default=None, gt=0, lt=1_000_000_000)
+
+class PaperExitSettings(BaseModel):
+    enabled: bool
+    target_percent: float = Field(ge=0.1, le=100)
+
 class Candidate(BaseModel):
     candidate_id: str = Field(min_length=8, max_length=80)
     symbol: str
     instrument_token: str
+    asset_class: AssetClass = "equity"
+    market_region: MarketRegion = "India"
+    exchange: str = Field(default="", max_length=40)
     side: Literal["BUY", "SELL"]
     entry: float = Field(gt=0)
     stop_loss: float = Field(gt=0)

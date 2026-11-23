@@ -1,4 +1,26 @@
+# Experimental paper strategy engine review (unreleased)
+
+- Added a deterministic price-rule engine and feed-driven paper worker. Unit tests cover strategy signals, candidate submission, risk rejection, manual approval, index-only gating, stale exits, kill/order races, autonomy revocation, kill/start race, and bounded bar deduplication.
+- Validation: backend `compileall` succeeded; `pytest -q tests` passed 32 tests; frontend `npm run build` succeeded; `git diff --check` passed. Vite emitted the existing large-chunk and `use client` directive warnings.
+- Independent AI peer review found and prompted fixes for the bot-start/kill race and unbounded seen-bar cache; its final read found no blocking issues in those fixes.
+- Scope remains an experimental paper-only rules engine. The strategy is not validated out of sample, costs/slippage/holiday calendar are not modeled, worker/order lifecycle lacks end-to-end feed and broker testing, and live routing remains unimplemented. A code review is not broker, compliance, investment or human release approval.
+
 # v2.0 Review Report
+
+## Unreleased — Twelve Data global paper-market integration
+
+- Added an optional Twelve Data streaming adapter and a separate global paper worker for explicitly configured US equities, FX pairs, and spot-commodity symbols. USD risk/P&L is segregated from INR calculations; global orders remain local paper records.
+- Safety checks: fresh provider timestamps, regular New York equity hours, approximate FX/commodity weekday sessions, 30 observed one-minute bars, per-trade/notional caps, one open USD position, daily USD loss lock and trade cap, shared kill/order lock, audit fail-closed behavior, and no live order path.
+- Regression coverage: seven new tests exercise US/FX/commodity session boundaries, real-tick normalization, New York bar-day reset, USD/INR ledger isolation, USD loss-lock revocation, and autonomy rollover. Focused validation passed 16 backend tests; `compileall` passed; Vite production build passed with existing large-chunk and `use client` warnings.
+- No Twelve Data API key was used, so provider authentication, symbol entitlement, real WebSocket operation, and live exchange schedule behavior remain untested. No independent human/agent peer review was performed in this turn; this report is the implementation's own review and must not be treated as independent approval.
+- Remaining limitations: this engine applies price-only rules, not the AI research brief; symbols, data-plan access, and quote rights depend on Twelve Data; FX is approximated as 24/5 and configured spot commodities inherit that approximation despite contract/provider-specific breaks; no venue holiday calendar, spread/fees/slippage/financing model, historical warm-up, durable positions, or restart recovery exists. This is not evidence of profitability and must not be used for live trading.
+
+## Unreleased dashboard and startup controls
+- Added regression coverage that startup and day rollover leave the kill switch released while the bot remains stopped.
+- Added exact `I AGREE` phrase validation; a test confirms live order submission still returns HTTP 501 even when configured activation flags and acknowledgement are supplied.
+- Added report charts/filters and separate intelligence navigation. The report view uses only closed trades in the current runtime and does not claim durable or statistically validated performance.
+- Validation: 16 backend tests passed; Python compile succeeded; Vite production build succeeded. Vite reports the large-bundle warning and lucide module-directive warnings.
+- No independent human or external reviewer has reviewed this change. Live routing, strategy scheduling, performance, and funded-account operation remain unvalidated.
 
 ## Pass 1 — Functional/API
 - FastAPI app import succeeded; application reports version 2.0.0.
@@ -28,3 +50,30 @@ These three passes were performed by the same assistant in separate functional, 
 ## Not tested
 - Frontend package install/build (dependency installation timed out in this environment). JSX syntax was separately transpiled with the locally installed TypeScript compiler and passed.
 - Real Upstox market feed, OAuth, sandbox, broker fills, partial fills, order reconciliation, real-time exits, production latency, restart recovery, Windows installation, and funded/live trading.
+
+## Follow-up repository review — multi-asset research scope
+
+- The current order-validation path requires a daily strategy approval, but no API route writes `state.approval`; as checked, paper and sandbox order submissions therefore fail validation.
+- No background scanner or strategy scheduler generates candidates. Candidate creation is an API input, and a dashboard approval does not create an order.
+- The market-data adapter subscribes to Upstox instrument keys; there is no global equity or commodity feed, market-hours/calendar layer, or cross-venue contract metadata.
+- There is no backtest/forward-test dataset or calibrated performance record. A 90–100% win-rate target cannot be supported or verified from this repository.
+- The research enhancement adds scope controls and source provenance, but does not change order execution or turn research output into a signal.
+- This follow-up is a code inspection only; no automated tests or build were run for these changes.
+
+## Release 2.1.0 implementation review
+
+- Added provider adapters for OpenAI, Anthropic, Gemini, NVIDIA NIM and OpenAI-compatible chat-completions APIs. Provider-grounding support differs; ungrounded adapters do not claim search capability, and readiness still requires sources.
+- Added daily Excel mirrors for candidate lifecycle records; the audit hash-chain remains canonical. Candidate expiry is evaluated on reads/decisions and therefore is not a continuously running background timer.
+- Added dashboard-wide emergency controls and filtered trade/suggestion/audit tabs. Engaging the emergency switch now also stops the agent and clears full-mode permission; resetting it leaves the agent stopped.
+- Full mode remains paper-mode permission only; there is no production scanner, calibrated win-rate evidence, durable trade-state recovery or global broker feed. Live order submission is still disabled.
+- Setup is documented in `SETUP_GUIDE.md`. Tests, package installation, and frontend build were not run for this release.
+- The existing `frontend/package-lock.json` was untracked before this work and was left untouched and unstaged.
+
+## Release 2.2.0 scope review
+
+- Added market-region, asset-class, exchange, and date filters across the trades and candidate APIs/dashboard, plus market/category filtering in audit views.
+- Added explicit visible execution mode selection. Paper mode remains active; live mode is rejected by the backend with HTTP 501.
+- Added currency/FX research scope and CORS support for both local Vite hostnames.
+- Classification is metadata only. US equities, commodities, FX and other global feeds, broker integrations, live order lifecycle, durable trade recovery, and production authentication remain unimplemented.
+- No automated tests or frontend build were run for these changes.
+
