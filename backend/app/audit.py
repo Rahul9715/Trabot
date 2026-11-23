@@ -33,6 +33,7 @@ def init_audit():
         )""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_events(occurred_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_events(entity_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_audit_type_seq ON audit_events(event_type, seq)")
         c.execute("""CREATE TRIGGER IF NOT EXISTS audit_no_update
             BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit ledger is append-only'); END""")
         c.execute("""CREATE TRIGGER IF NOT EXISTS audit_no_delete
@@ -70,6 +71,27 @@ def list_events(limit: int = 100, before_seq: int | None = None):
     out=[]
     for r in rows:
         d=dict(r); d["payload"] = json.loads(d.pop("payload_json")); out.append(d)
+    return out
+
+
+def list_events_by_type(event_types: list[str], limit: int = 100000):
+    """Read ordered lifecycle records for durable trade and candidate history."""
+    types = list(dict.fromkeys(str(value) for value in event_types if value))
+    if not types:
+        return []
+    init_audit()
+    placeholders = ",".join("?" for _ in types)
+    bounded_limit = max(1, min(int(limit), 250000))
+    with _connect() as c:
+        rows = c.execute(
+            f"SELECT * FROM audit_events WHERE event_type IN ({placeholders}) ORDER BY seq DESC LIMIT ?",
+            (*types, bounded_limit),
+        ).fetchall()
+    out = []
+    for row in reversed(rows):
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json"))
+        out.append(item)
     return out
 
 

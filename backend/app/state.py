@@ -1,10 +1,28 @@
 from datetime import datetime, timezone, date
 from zoneinfo import ZoneInfo
+from .config import MAX_OPEN_POSITIONS, MAX_TRADES_PER_DAY, PAPER_TRADE_LIMITS_PATH
+from .paper_limits import load_limits
+from .config import PAPER_EXIT_SETTINGS_PATH
+from .exit_settings import load_exit_settings
 
 class RuntimeState:
     def __init__(self):
+        limits = load_limits(PAPER_TRADE_LIMITS_PATH, {
+            "max_open_positions": MAX_OPEN_POSITIONS,
+            "max_trades_per_day": MAX_TRADES_PER_DAY,
+        })
+        self.max_open_positions = limits["max_open_positions"]
+        self.max_trades_per_day = limits["max_trades_per_day"]
+        self.max_risk_per_trade = limits["max_risk_per_trade"]
+        exit_settings = load_exit_settings(PAPER_EXIT_SETTINGS_PATH)
+        self.profit_exit_enabled = exit_settings["enabled"]
+        self.profit_exit_target_percent = exit_settings["target_percent"]
         self.approval = None
         self.ticks = {}
+        self.option_contracts = {}
+        self.option_scan_status = "NOT_CONFIGURED"
+        self.option_scan_error = None
+        self.option_scan_last_at = None
         self.orders = []
         self.candidates = {}
         self.daily_realised_pnl = 0.0
@@ -58,18 +76,20 @@ class RuntimeState:
     def reset_daily_counters_if_needed(self):
         today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
         if today != self.daily_date:
+            keep_autonomy = bool(self.autonomous_mode and self.bot_enabled and not self.kill_switch)
             keep_global_autonomy = bool(self.global_autonomous_mode and self.bot_enabled and not self.kill_switch)
             self.daily_date = today
             self.daily_realised_pnl = 0.0
-            self.autonomous_mode = keep_global_autonomy
-            if not keep_global_autonomy:
+            self.autonomous_mode = keep_autonomy
+            self.global_autonomous_mode = keep_global_autonomy
+            if not keep_autonomy:
                 self.autonomous_daily_loss_limit = None
             self.daily_loss_lock = False
             self.daily_loss_baseline = 0.0
             self.approval = None
             # The emergency switch is independent of day counters. A daily
             # rollover must never release an engaged kill switch.
-            self.operating_mode = "FULL" if keep_global_autonomy else "SEMI"
+            self.operating_mode = "FULL" if keep_autonomy or keep_global_autonomy else "SEMI"
 
 state = RuntimeState()
 

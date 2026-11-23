@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased — durable reports and execution-aware paper fills
+- Reconstruct trade/order history and candidate decision history from the append-only local audit ledger, and restore open paper positions after backend restarts. Historical records are available only when their lifecycle events were written to that ledger.
+- Use Asia/Kolkata calendar dates consistently in trade, suggestion, audit, and report filters.
+- Model paper entries and exits with the best streamed bid/ask when available, otherwise configurable spread and slippage estimates; deduct configured brokerage, exchange, STT, stamp duty, SEBI and GST estimates for India, and a configurable USD cost-rate estimate for global paper trades.
+- Show net realized P&L reports with cumulative and daily charts, win/loss outcomes, average wins/losses, profit factor, and drawdown. Live broker routing remains disabled.
+- Add a fixed latest-action timestamp to each trade, freeze it at closure, and close India paper positions at session cutoff using the latest in-session quote. Ignore after-hours ticks for stop/target decisions.
+- Void an invalid after-hours paper stop from active history/P&L via an append-only correction event while preserving the original event and a backup of the local learning file.
+
+## Next build backlog
+- Persist complete paper trade/order history locally and reload it after backend restarts, so the Trades table can show prior-day records when the date filters include them. Preserve open/closed status, actual entry and exit prices, realized/unrealized P&L, market, currency, and symbol; keep INR and USD accounts distinct and avoid duplicate history rows.
+
+## Unreleased — Paper model baseline and responsive layout
+- Capture price-only features from each signal bar and retain them with the closed paper outcome; older records without snapshots are excluded from training.
+- Add manual local logistic-regression training with a chronological holdout, visible sample/class counts, metrics, versioned artifacts, and a hard shadow-only boundary.
+- Add configurable model storage and optional shared environment-file loading, retaining local `.env` as fallback. No external Drive data is copied automatically.
+- Expand the dashboard to full available width and make its tables/grid layouts adapt to screen size.
+
+## Unreleased — Arm paper autonomy before readiness
+- Add a single dashboard action to start the agent and arm full paper autonomy with its daily loss limit, even while the market feed or research checks are still pending.
+- Keep order submission gated on fresh in-session data, current source-backed intelligence, a healthy audit ledger, open market hours, configured instruments, and risk controls.
+- Preserve an armed mode across daily counter rollover while the backend process remains running; manual stop, kill switch, or daily loss lock still revoke autonomy.
+
+## Unreleased — paper trade controls, attribution, and decision review
+- Set new-install paper defaults to 10 concurrent positions and 15 daily entries per account, with validated dashboard controls and local persistence.
+- Show current capital plus daily P&L, open positions, and entries; add actual entry, exit/mark, and per-trade P&L to the Trades table.
+- Map NSE instrument keys back to readable symbols, and sample a broad configured equity universe under Upstox's 100-key subscription cap while reserving capacity for options.
+- Capture rule triggers, price/risk-reward context, approvals, and rejection reasons; persist closed outcomes for strategy-level win-rate/P&L/R review.
+- Add repeat-signal cooldown and duplicate-underlying exposure guards. After 20 outcomes with non-positive average R, pause autonomous entries for that strategy while keeping suggestions visible.
+- Keep live routes unimplemented. Paper outcomes are available for later live-mode review but do not authorize real orders.
+
+## Unreleased — broader paper scanning and warm-up recovery
+- Added EMA(5,13), Donchian(10), Bollinger re-entry and MACD(12,26,9) alongside the existing paper rules.
+- Added optional local NSE equity watchlist loading and an Upstox option-chain path that maps directional setups to filtered long calls or long puts for configured index/stock underlyings.
+- Persist completed India and global minute bars locally and reload same-session warm-up after backend restart; partial bars and prior-session bars are excluded.
+- Live broker routing remains unimplemented; the live-order endpoint is still fail-closed.
+
 ## Unreleased — Twelve Data global paper markets
 - Add optional Twelve Data WebSocket quote ingestion for explicitly configured US equities, FX pairs, and spot commodity symbols.
 - Add a separate USD paper account, risk caps, daily loss lock, trade-count cap, market-session gates, 30-real-bar warm-up, suggestions, semi-mode human approval, and full-mode local paper orders.

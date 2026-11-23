@@ -152,11 +152,17 @@ def generate_research(system: str, prompt: str, search_enabled: bool = True) -> 
             if not base_url:
                 raise AIProviderError("AI_BASE_URL is required for openai_compatible providers.")
             client = OpenAI(api_key=AI_API_KEY, base_url=base_url, timeout=AI_TIMEOUT_SECONDS, max_retries=2)
-            response = client.chat.completions.create(
-                model=AI_MODEL,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-                max_tokens=6000,
-            )
+            request_args = {
+                "model": AI_MODEL,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                "max_tokens": 6000,
+            }
+            if provider == "nvidia":
+                # Nemotron's default reasoning budget (16k) exceeds this call's
+                # 6k output budget and can leave no user-facing text to return.
+                # This brief is text-only; request its final answer directly.
+                request_args["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+            response = client.chat.completions.create(**request_args)
             message = response.choices[0].message if response.choices else None
             content = getattr(message, "content", None)
             if isinstance(content, list):

@@ -3,6 +3,7 @@ import threading
 from datetime import datetime, timezone
 from .state import state
 from .config import UPSTOX_ACCESS_TOKEN
+from .market_data import provider_timestamp
 
 
 def _safe_stream_error(args, token: str | None = None) -> str:
@@ -97,8 +98,13 @@ class UpstoxFeed:
                 return
             now = datetime.now(timezone.utc).isoformat()
             feeds = message.get("feeds", {}) if isinstance(message, dict) else {}
+            provider_received_at = provider_timestamp(message.get("currentTs") if isinstance(message, dict) else None)
             for instrument_key, item in feeds.items():
-                ltpc = item.get("ltpc") or item.get("fullFeed", {}).get("marketFF", {}).get("ltpc") or item.get("fullFeed", {}).get("indexFF", {}).get("ltpc") or {}
+                full_feed = item.get("fullFeed", {}) if isinstance(item, dict) else {}
+                option_level = ((item.get("firstLevelWithGreeks") or full_feed.get("firstLevelWithGreeks", {}))
+                                if isinstance(item, dict) else {})
+                ltpc = (item.get("ltpc") or full_feed.get("marketFF", {}).get("ltpc")
+                        or full_feed.get("indexFF", {}).get("ltpc") or option_level.get("ltpc") or {})
                 ltp = ltpc.get("ltp")
                 if ltp is not None:
                     # A fresh market message proves the stream recovered, even if a
@@ -106,8 +112,31 @@ class UpstoxFeed:
                     state.connected = True
                     state.feed_status = "CONNECTED"
                     state.feed_error = None
-                    state.tick(instrument_key, {"ltp": float(ltp), "instrument_key": instrument_key,
-                                                "received_at": now, "raw": item})
+                    tick = {"ltp": float(ltp), "instrument_key": instrument_key,
+                            "received_at": now,
+                            "provider_received_at": provider_received_at,
+                            "last_traded_at": provider_timestamp(ltpc.get("ltt")), "raw": item,
+                            "source": "Upstox V3 WebSocket"}
+                    market_ff = full_feed.get("marketFF", {}) if isinstance(full_feed, dict) else {}
+                    level = market_ff.get("marketLevel", {}) if isinstance(market_ff, dict) else {}
+                    book = level.get("bidAskQuote", []) if isinstance(level, dict) else []
+                    if isinstance(book, list) and book:
+                        try:
+                            bids = [float(row["bidP"]) for row in book if float(row.get("bidP", 0)) > 0]
+                            asks = [float(row["askP"]) for row in book if float(row.get("askP", 0)) > 0]
+                            if bids and asks and max(bids) <= min(asks):
+                                tick.update({"bid": max(bids), "ask": min(asks)})
+                        except (KeyError, TypeError, ValueError):
+                            pass
+                    if "bid" not in tick or "ask" not in tick:
+                        first_depth = option_level.get("firstDepth", {}) if isinstance(option_level, dict) else {}
+                        try:
+                            bid, ask = float(first_depth.get("bidP", 0)), float(first_depth.get("askP", 0))
+                            if bid > 0 and ask > 0 and bid <= ask:
+                                tick.update({"bid": bid, "ask": ask})
+                        except (TypeError, ValueError):
+                            pass
+                    state.tick(instrument_key, tick)
         streamer.on("open", on_open)
         streamer.on("close", on_close)
         streamer.on("error", on_error)
@@ -140,5 +169,31 @@ class UpstoxFeed:
                 streamer.disconnect()
             except Exception:
                 pass
+
+    def subscribe(self, instrument_keys: list[str]):
+        """Add contracts to the current stream without replacing base subscriptions."""
+        if not instrument_keys:
+            return
+        with self._lock:
+            streamer = self.streamer
+            new_keys = [key for key in dict.fromkeys(instrument_keys) if key not in self._instrument_keys]
+            if not streamer or not new_keys:
+                return
+            if len(self._instrument_keys) + len(new_keys) > 100:
+                raise RuntimeError("Upstox feed subscription limit reached; remove unused symbols before adding option contracts.")
+            self._instrument_keys = self._instrument_keys + tuple(new_keys)
+            streamer.subscribe(new_keys, "full")
+
+    def unsubscribe(self, instrument_keys: list[str]):
+        if not instrument_keys:
+            return
+        with self._lock:
+            streamer = self.streamer
+            remove = [key for key in instrument_keys if key in self._instrument_keys]
+            if not streamer or not remove:
+                return
+            streamer.unsubscribe(remove)
+            removed = set(remove)
+            self._instrument_keys = tuple(key for key in self._instrument_keys if key not in removed)
 
 feed = UpstoxFeed()

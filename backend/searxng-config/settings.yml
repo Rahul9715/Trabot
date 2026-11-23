@@ -1,6 +1,6 @@
 use_default_settings: true
 server:
-  secret_key: "REPLACE_WITH_RANDOM_SECRET"
+  secret_key: "5ee788f18b384376af3747dd7a9028ac"
 search:
   formats:
     - html
